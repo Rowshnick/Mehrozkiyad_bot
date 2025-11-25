@@ -1,15 +1,12 @@
-# utils/healing_service.py
 def get_healing_text():
-    # utils/healing.py - simple suggestion generator for domains
-    return "پیام انرژی درمانی: آرامش، تعادل و تمرکز برای امروز."
+    return "پیام درمانی: آرامش، تعادل و تمرکز برای امروز."
 
-def get_suggestion(user_id, field):
-    field_map = {
-        "سلامت": "تمرکز روی خواب منظم و تغذیه سالم.",
-        "ثروت": "برنامه‌ریزی مالی هفتگی و صرفه‌جویی هدفمند.",
-        "عشق": "ارتباط صادقانه و گوش دادن فعال به شریک زندگی.",
-        "شغل": "تعیین اهداف کوتاه‌مدت و افزایش مهارت‌های تخصصی.",
-        "موفقیت": "تفکیک کارها به وظایف کوچک و پیگیری منظم."
+def get_suggestion(user_id: int, field: str) -> dict:
+    fmap = {
+        "stone": "تمرکز روی سنگ‌های انرژی‌بخش مثل کوارتز.",
+        "herb": "استفاده از گیاهان درمانی مثل آرام‌بخش‌ها.",
+        "mantra": "تکرار مانترای مثبت برای تمرکز ذهن.",
+        "symbol": "نماد درمانی برای تعادل و ارتعاش انرژی."
     }
-    text = field_map.get(field, "پیشنهاد کلی: مراقبت از خود و برنامه‌ریزی.")
-    return {"text": f"پیشنهاد برای حوزه {field}: {text}", "image_url": "https://via.placeholder.com/512x256.png?text=Suggestion"}
+    text = fmap.get(field, "نگاهی به خودتان و درونتان بیندازید.")
+    return {"text": f"{text}", "image_url": None}
