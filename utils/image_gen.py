@@ -1,36 +1,31 @@
 # utils/image_gen.py
 from PIL import Image, ImageDraw, ImageFont
-import io
+import math
 
-def generate_horoscope_image(horoscope_text: str, width=800, height=1000) -> bytes:
-    """
-    تولید عکس هوروسکوپ با متن فارسی
-    خروجی: بایت برای ارسال در تلگرام
-    """
-    # ایجاد بوم سفید
-    img = Image.new("RGB", (width, height), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
+def draw_horoscope_image(positions: dict, filename: str = "horoscope.png") -> str:
+    """ساخت تصویر هوروسکوپ حرفه‌ای"""
+    width, height = 800, 800
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
 
-    # فونت فارسی (فونت یک مسیر معتبر به ttf)
+    # فونت فارسی (باید مسیر فونت را درست کنید)
     try:
-        font = ImageFont.truetype("fonts/Vazir.ttf", 28)
+        font = ImageFont.truetype("Vazir-Regular.ttf", 24)
     except:
         font = ImageFont.load_default()
 
-    # حاشیه و فاصله خطوط
-    x_margin = 40
-    y_margin = 40
-    line_height = 40
+    # رسم دایره و بخش‌های اصلی
+    center = width // 2, height // 2
+    radius = 300
+    draw.ellipse((center[0]-radius, center[1]-radius, center[0]+radius, center[1]+radius), outline="black", width=3)
 
-    # تقسیم متن به خطوط
-    lines = horoscope_text.split("\n")
-    y_text = y_margin
-    for line in lines:
-        draw.text((x_margin, y_text), line, fill=(0, 0, 0), font=font)
-        y_text += line_height
+    # رسم سیارات روی دایره
+    for i, (planet, degree) in enumerate(positions.items()):
+        angle = math.radians(degree)
+        x = center[0] + radius * math.cos(angle - math.pi/2)
+        y = center[1] + radius * math.sin(angle - math.pi/2)
+        draw.text((x, y), planet, fill="black", font=font)
 
-    # تبدیل به بایت
-    byte_arr = io.BytesIO()
-    img.save(byte_arr, format="PNG")
-    byte_arr.seek(0)
-    return byte_arr.getvalue()
+    # ذخیره تصویر
+    image.save(filename)
+    return filename
