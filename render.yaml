@@ -10,7 +10,7 @@ services:
                   pip install --upgrade pip
     startCommand: python bot_app.py
     envVars:
-      - key: TELEGRAM_BOT_TOKEN
+      - key: BOT_TOKEN
         value: 8555233519:AAFeKZgy4xGYjl_ibUEmVuC7HHv-Eo0FCww
         sync: false
       - key: WEBHOOK_URL
