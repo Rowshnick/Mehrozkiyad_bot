@@ -1,143 +1,103 @@
 import os
 import logging
-from datetime import datetime
-import sqlite3
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 
-from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup,
-    Update
-)
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
-    CallbackQueryHandler, ConversationHandler, filters
-)
+from utils.horoscope_service import get_horoscope_with_image
 
-from utils import astro, healing, date_conv, image_gen, payment
+logging.basicConfig(level=logging.INFO)
 
-# ----- Logging -----
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+PAYMENT_TOKEN = os.getenv("PAYMENT_TOKEN")  # برای پرداخت آنلاین
 
-# ----- Database -----
-DB_PATH = "data/bot_data.db"
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users(
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    referral TEXT,
-    paid INTEGER DEFAULT 0
-)
-""")
-conn.commit()
+# مراحل دریافت داده‌ها
+DAY, MONTH, YEAR, HOUR, MINUTE, LAT, LON = range(7)
 
-# ----- States -----
-DAY, MONTH, YEAR = range(3)
-PAYMENT = range(1)
-
-# ----- Main Menu Keyboard -----
-main_menu = ReplyKeyboardMarkup(
-    [["🪐 هوروسکوپ", "💖 هیولینگ"],
-     ["📅 تبدیل تاریخ", "ℹ️ درباره ما"]],
-    resize_keyboard=True
-)
-
-# ----- Start Command -----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    cursor.execute(
-        "INSERT OR IGNORE INTO users(user_id, username) VALUES (?, ?)",
-        (user.id, user.username)
-    )
-    conn.commit()
-    await update.message.reply_text(
-        "سلام! خوش آمدید به بوت حرفه‌ای مهروزکیاد.\n"
-        "یک گزینه از منوی زیر انتخاب کنید:",
-        reply_markup=main_menu
-    )
+    keyboard = [
+        [InlineKeyboardButton("هوروسکوپ", callback_data='horoscope')],
+        [InlineKeyboardButton("هیولینگ", callback_data='healing')],
+        [InlineKeyboardButton("تبدیل تاریخ", callback_data='date_conv')],
+        [InlineKeyboardButton("درباره ما", callback_data='about')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("سلام! من بات هوروسکوپ حرفه‌ای هستم.", reply_markup=reply_markup)
 
-# ----- Horoscope Conversation -----
+# --- دریافت تاریخ و مکان ---
 async def horoscope_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("لطفا روز تولد خود را وارد کنید (عدد):")
+    await update.callback_query.message.reply_text("لطفاً روز تولد خود را وارد کنید (مثلاً: 17)")
     return DAY
 
-async def horoscope_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["day"] = int(update.message.text)
-    await update.message.reply_text("ماه تولد خود را وارد کنید (عدد):")
+async def get_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['day'] = int(update.message.text)
+    await update.message.reply_text("ماه تولد خود را وارد کنید (مثلاً: 5)")
     return MONTH
 
-async def horoscope_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["month"] = int(update.message.text)
-    await update.message.reply_text("سال تولد خود را وارد کنید (میلادی):")
+async def get_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['month'] = int(update.message.text)
+    await update.message.reply_text("سال تولد خود را وارد کنید (مثلاً: 1990)")
     return YEAR
 
-async def horoscope_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["year"] = int(update.message.text)
-    day = context.user_data["day"]
-    month = context.user_data["month"]
-    year = context.user_data["year"]
+async def get_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['year'] = int(update.message.text)
+    await update.message.reply_text("ساعت تولد (اختیاری، برای دقت بهتر، اگر ندارید 12 وارد کنید)")
+    return HOUR
 
-    text = astro.get_horoscope(day, month, year)
-    await update.message.reply_text(f"🪐 هوروسکوپ شما:\n{text}", parse_mode="Markdown")
+async def get_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    context.user_data['hour'] = int(text) if text.isdigit() else 12
+    await update.message.reply_text("دقیقه تولد (اختیاری، اگر ندارید 0 وارد کنید)")
+    return MINUTE
 
-    # ساخت عکس هوروسکوپ
-    image_path = image_gen.create_horoscope_image(day, month, year, text)
-    await update.message.reply_photo(open(image_path, "rb"))
+async def get_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    context.user_data['minute'] = int(text) if text.isdigit() else 0
+    await update.message.reply_text("عرض جغرافیایی محل تولد (مثلاً تهران: 35.6892)")
+    return LAT
 
+async def get_lat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['lat'] = float(update.message.text)
+    await update.message.reply_text("طول جغرافیایی محل تولد (مثلاً تهران: 51.3890)")
+    return LON
+
+async def get_lon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['lon'] = float(update.message.text)
+    data = context.user_data
+    text, img_path = get_horoscope_with_image(
+        year=data['year'], month=data['month'], day=data['day'],
+        hour=data['hour'], minute=data['minute'],
+        lat=data['lat'], lon=data['lon']
+    )
+    await update.message.reply_photo(photo=open(img_path, 'rb'), caption=text)
     return ConversationHandler.END
 
-# ----- Healing -----
-async def healing_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = healing.get_healing_text()
-    await update.message.reply_text(text, parse_mode="Markdown")
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("عملیات لغو شد.")
+    return ConversationHandler.END
 
-# ----- Date Conversion -----
-async def date_conversion(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("لطفا تاریخ میلادی خود را وارد کنید (YYYY-MM-DD):")
-
-async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    date_str = update.message.text
-    try:
-        shamsi = date_conv.gregorian_to_jalali(date_str)
-        await update.message.reply_text(f"تاریخ شمسی: {shamsi}")
-    except:
-        await update.message.reply_text("فرمت اشتباه است. دوباره امتحان کنید.")
-
-# ----- About -----
-async def about_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "بوت حرفه‌ای مهروزکیاد\n"
-        "⚡ نسخه پیشرفته با منو حرفه‌ای و کیبورد چندلایه\n"
-        "💻 پشتیبانی هوروسکوپ، هیولینگ، تبدیل تاریخ\n"
-        "🌐 وب‌سایت و شبکه اجتماعی: https://mehrozkiyad.com\n"
-    )
-    await update.message.reply_text(text)
-
-# ----- Main -----
-if __name__ == "__main__":
-    TOKEN = os.getenv("BOT_TOKEN") or "YOUR_TELEGRAM_BOT_TOKEN"
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Conversation for Horoscope
-    horoscope_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("🪐 هوروسکوپ"), horoscope_start)],
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(horoscope_start, pattern='horoscope')],
         states={
-            DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_day)],
-            MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_month)],
-            YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_year)]
+            DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_day)],
+            MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_month)],
+            YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_year)],
+            HOUR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_hour)],
+            MINUTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_minute)],
+            LAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_lat)],
+            LON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_lon)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(horoscope_conv)
-    app.add_handler(MessageHandler(filters.Regex("💖 هیولینگ"), healing_cmd))
-    app.add_handler(MessageHandler(filters.Regex("📅 تبدیل تاریخ"), date_conversion))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, date_received))
-    app.add_handler(MessageHandler(filters.Regex("ℹ️ درباره ما"), about_cmd))
+    app.add_handler(conv_handler)
 
-    print("بوت آماده است...")
+    print("Bot is running...")
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
+
