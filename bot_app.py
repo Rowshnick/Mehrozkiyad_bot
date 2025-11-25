@@ -1,83 +1,99 @@
 import os
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, ConversationHandler, filters
+import sqlite3
+from datetime import datetime
+from telegram import (
+    Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 )
-from utils import astro, healing, date_converter, image_gen, payment, referral
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ContextTypes, ConversationHandler, CallbackQueryHandler
+)
+from utils import astro, healing, date_conv, image_gen, payment
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# مراحل گفتگو
-(
-    MAIN_MENU,
-    HOROSCOPE_DAY,
-    HOROSCOPE_MONTH,
-    HOROSCOPE_YEAR,
-    HEALING,
-    DATE_CONVERT,
-    PAYMENT,
-) = range(7)
+# Conversation states
+MAIN_MENU, HOROSCOPE_DAY, HOROSCOPE_MONTH, HOROSCOPE_YEAR, HEALING, DATE_CONV = range(6)
 
-# منوی اصلی
-def main_menu_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("هوروسکوپ 🪐", callback_data="horoscope")],
-        [InlineKeyboardButton("هیولینگ ✨", callback_data="healing")],
-        [InlineKeyboardButton("تبدیل تاریخ 📅", callback_data="date_convert")],
-        [InlineKeyboardButton("درباره ما ℹ️", callback_data="about")],
-        [InlineKeyboardButton("شبکه اجتماعی 🌐", url="https://yourwebsite.com")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# Database initialization
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    telegram_id INTEGER UNIQUE,
+    referral TEXT,
+    paid INTEGER DEFAULT 0
+)
+""")
+conn.commit()
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "به بوت حرفه‌ای مهروزکیاد خوش آمدید! 🌟\n"
-        "لطفاً یکی از گزینه‌ها را انتخاب کنید:", 
-        reply_markup=main_menu_keyboard()
+    """Start command and main menu"""
+    user = update.effective_user
+    keyboard = [
+        ["🪐 هوروسکوپ", "💖 هیولینگ"],
+        ["📅 تبدیل تاریخ", "ℹ️ درباره ما"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_markdown_v2(
+        f"سلام {user.first_name}! 👋\n"
+        "به بوت حرفه‌ای مهروزکیاد خوش آمدید.\n"
+        "لطفاً یکی از گزینه‌ها را انتخاب کنید:",
+        reply_markup=reply_markup
     )
+    # Insert user to DB if not exists
+    cursor.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (user.id,))
+    conn.commit()
     return MAIN_MENU
 
-# هندلر انتخاب منو
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
 
-    if data == "horoscope":
-        await query.message.reply_text("لطفاً روز تولد خود را وارد کنید (عدد):")
+async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "🪐 هوروسکوپ":
+        await update.message.reply_text("لطفاً روز تولد خود را وارد کنید (مثال: 21)")
         return HOROSCOPE_DAY
-    elif data == "healing":
-        await query.message.reply_text("لطفاً موضوع هیولینگ خود را وارد کنید:")
-        return HEALING
-    elif data == "date_convert":
-        await query.message.reply_text("لطفاً تاریخ خود را وارد کنید (YYYY-MM-DD):")
-        return DATE_CONVERT
-    elif data == "about":
-        await query.message.reply_text(
-            "بوت حرفه‌ای مهروزکیاد توسط تیم ما ساخته شده است.\n"
-            "وب‌سایت: https://yourwebsite.com\n"
-            "اینستاگرام: https://instagram.com/yourprofile"
+    elif text == "💖 هیولینگ":
+        await update.message.reply_text("هیولینگ در حال آماده‌سازی…")
+        # Call healing function here
+        result = healing.generate_healing(update.effective_user.id)
+        await update.message.reply_markdown(result)
+        return MAIN_MENU
+    elif text == "📅 تبدیل تاریخ":
+        await update.message.reply_text("لطفاً تاریخ میلادی خود را وارد کنید (YYYY-MM-DD)")
+        return DATE_CONV
+    elif text == "ℹ️ درباره ما":
+        await update.message.reply_markdown(
+            "🤖 بوت حرفه‌ای مهروزکیاد\n"
+            "🌐 وب‌سایت: [mehrozkiyad.com](https://mehrozkiyad.com)\n"
+            "📱 شبکه اجتماعی: [Instagram](https://instagram.com/mehrozkiyad)"
         )
         return MAIN_MENU
+    else:
+        await update.message.reply_text("لطفاً یکی از گزینه‌ها را از منو انتخاب کنید.")
+        return MAIN_MENU
 
-# جمع‌آوری روز/ماه/سال و تولید هوروسکوپ
+
+# --- Horoscope flow ---
 async def horoscope_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['day'] = int(update.message.text)
-    await update.message.reply_text("لطفاً ماه تولد خود را وارد کنید (عدد):")
+    await update.message.reply_text("لطفاً ماه تولد خود را وارد کنید (1-12)")
     return HOROSCOPE_MONTH
 
 async def horoscope_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['month'] = int(update.message.text)
-    await update.message.reply_text("لطفاً سال تولد خود را وارد کنید (عدد):")
+    await update.message.reply_text("لطفاً سال تولد خود را وارد کنید (مثال: 1990)")
     return HOROSCOPE_YEAR
 
 async def horoscope_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -85,45 +101,48 @@ async def horoscope_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
     day = context.user_data['day']
     month = context.user_data['month']
     year = context.user_data['year']
-
-    text = astro.get_horoscope(day, month, year)
-    img_path = image_gen.create_horoscope_image(day, month, year)
-
-    await update.message.reply_photo(photo=open(img_path, 'rb'), caption=text)
+    
+    # Call astro module to generate horoscope
+    result_text = astro.get_horoscope(day, month, year)
+    
+    # Generate horoscope image
+    img_path = image_gen.create_horoscope_image(result_text, update.effective_user.id)
+    
+    await update.message.reply_photo(photo=open(img_path, 'rb'), caption=result_text, parse_mode="Markdown")
     return MAIN_MENU
 
-# هیولینگ
-async def healing_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    topic = update.message.text
-    response = healing.generate_healing(topic)
-    await update.message.reply_text(response)
+
+# --- Date conversion ---
+async def date_conversion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    try:
+        date_obj = datetime.strptime(text, "%Y-%m-%d")
+        shamsi_date = date_conv.gregorian_to_jalali(date_obj)
+        await update.message.reply_text(f"تاریخ شمسی: {shamsi_date}")
+    except Exception as e:
+        await update.message.reply_text("فرمت تاریخ صحیح نیست. لطفاً YYYY-MM-DD وارد کنید.")
     return MAIN_MENU
 
-# تبدیل تاریخ
-async def date_convert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    date_str = update.message.text
-    converted = date_converter.convert_date(date_str)
-    await update.message.reply_text(f"تبدیل تاریخ:\n{converted}")
-    return MAIN_MENU
 
-# برنامه اصلی
-app = ApplicationBuilder().token(TOKEN).build()
-
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("start", start)],
-    states={
-        MAIN_MENU: [CallbackQueryHandler(menu_handler)],
-        HOROSCOPE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_day)],
-        HOROSCOPE_MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_month)],
-        HOROSCOPE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_year)],
-        HEALING: [MessageHandler(filters.TEXT & ~filters.COMMAND, healing_handler)],
-        DATE_CONVERT: [MessageHandler(filters.TEXT & ~filters.COMMAND, date_convert_handler)],
-    },
-    fallbacks=[CommandHandler("start", start)],
-)
-
-app.add_handler(conv_handler)
-
-if __name__ == "__main__":
-    print("بوت در حال اجراست...")
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            MAIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
+            HOROSCOPE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_day)],
+            HOROSCOPE_MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_month)],
+            HOROSCOPE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, horoscope_year)],
+            DATE_CONV: [MessageHandler(filters.TEXT & ~filters.COMMAND, date_conversion)],
+        },
+        fallbacks=[CommandHandler('start', start)],
+    )
+    
+    app.add_handler(conv_handler)
     app.run_polling()
+
+
+if __name__ == '__main__':
+    main()
+    
