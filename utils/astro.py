@@ -1,3 +1,6 @@
+import swisseph as swe
+from datetime import datetime
+
 # utils/astro.py - Example implementations for astro utilities.
 from datetime import date
 from persiantools.jdatetime import JalaliDate
@@ -26,15 +29,16 @@ def get_daily_horoscope():
     # simple deterministic stub - in real app you'd compute based on planetary positions
     today = date.today()
     return f"طالع روزانه برای {today.isoformat()}: روزی خوب برای تمرکز و برنامه‌ریزی."
-
-def get_horoscope(iso_date: str):
-    # expects ISO date YYYY-MM-DD
-    parts = iso_date.split("-")
-    if len(parts) != 3:
-        raise ValueError("تاریخ باید به فرمت YYYY-MM-DD باشد.")
-    y, m, d = parts
-    # simple stub response
-    return f"طالع برای {iso_date}: انرژی مثبت، فرصت برای رشد شخصی."
+    
+def get_horoscope(day, month, year):
+    jd = swe.julday(year, month, day)
+    # نمونه ساده، شما می‌توانید تحلیل کامل اضافه کنید
+    planets = ["خورشید", "ماه", "عطارد", "زهره", "مریخ"]
+    positions = [round(jd % 30 + i, 2) for i, p in enumerate(planets)]
+    text = "🪐 هوروسکوپ شما:\n"
+    for planet, pos in zip(planets, positions):
+        text += f"{planet}: {pos} درجه\n"
+    return text
 
 def get_personal_symbol(user_id):
     # Return a dict with text and image_url (placeholder)
