@@ -1,132 +1,116 @@
 import os
-import logging
-import asyncio
+from datetime import datetime
+import swisseph as swe
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ConversationHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters, ConversationHandler
 )
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from dotenv import load_dotenv
+import pytz
+import requests
+from persiantools.jdatetime import JalaliDate
 
-from utils.horoscope_service import get_horoscope_with_image
+# بارگذاری متغیرهای محیطی
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+print("TOKEN:", TOKEN)  # برای تست مقدار Token
 
-logging.basicConfig(level=logging.INFO)
+if not TOKEN:
+    raise ValueError("توکن تلگرام تنظیم نشده است! لطفاً در Environment Variable با کلید BOT_TOKEN مقداردهی کنید.")
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-PORT = int(os.environ.get("PORT", "8443"))  # پورت پیش‌فرض Render
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")      # آدرس وبهوک شما
+# حالت‌ها برای ConversationHandler
+SELECT_LANGUAGE, GET_BIRTHDATE, SHOW_HOROSCOPE = range(3)
 
-# مراحل دریافت داده‌ها
-DAY, MONTH, YEAR, HOUR, MINUTE, CITY = range(6)
+# متغیرهای بینابینی
+user_data_store = {}
 
-geolocator = Nominatim(user_agent="horoscope_bot")
+# دکمه‌های زبان
+LANG_KEYBOARD = [
+    [InlineKeyboardButton("فارسی", callback_data="fa")],
+    [InlineKeyboardButton("English", callback_data="en")]
+]
+
+def generate_date_keyboard(lang="fa"):
+    if lang == "fa":
+        months = ["فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور","مهر","آبان","آذر","دی","بهمن","اسفند"]
+    else:
+        months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    month_buttons = [[InlineKeyboardButton(m, callback_data=str(i+1))] for i, m in enumerate(months)]
+    day_buttons = [[InlineKeyboardButton(str(d), callback_data=str(d))] for d in range(1, 32)]
+    year_buttons = [[InlineKeyboardButton(str(y), callback_data=str(y))] for y in range(1950, 2026)]
+    return month_buttons, day_buttons, year_buttons
+
+def generate_horoscope_text(birth_date: datetime, lang="fa") -> str:
+    jd = swe.julday(birth_date.year, birth_date.month, birth_date.day)
+    planets = {
+        "Sun": swe.SUN,
+        "Moon": swe.MOON,
+        "Mercury": swe.MERCURY,
+        "Venus": swe.VENUS,
+        "Mars": swe.MARS,
+        "Jupiter": swe.JUPITER,
+        "Saturn": swe.SATURN,
+        "Uranus": swe.URANUS,
+        "Neptune": swe.NEPTUNE,
+        "Pluto": swe.PLUTO
+    }
+    horoscope = ""
+    for name, code in planets.items():
+        lon, lat, dist = swe.calc(jd, code)[:3]
+        horoscope += f"{name}: Longitude={lon:.2f}, Latitude={lat:.2f}\n"
+    horoscope += "\nپیشنهاد: امروز تمرکز روی خودشناسی و تقویت روابطتان باشد.\n" if lang=="fa" else "\nSuggestion: Focus on self-awareness and strengthening your relationships today.\n"
+    return horoscope
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("هوروسکوپ", callback_data='horoscope')],
-        [InlineKeyboardButton("هیولینگ", callback_data='healing')],
-        [InlineKeyboardButton("تبدیل تاریخ", callback_data='date_conv')],
-        [InlineKeyboardButton("درباره ما", callback_data='about')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("سلام! من بات هوروسکوپ حرفه‌ای هستم.", reply_markup=reply_markup)
+    keyboard = InlineKeyboardMarkup(LANG_KEYBOARD)
+    await update.message.reply_text("لطفاً زبان خود را انتخاب کنید / Please select your language:", reply_markup=keyboard)
+    return SELECT_LANGUAGE
 
-async def horoscope_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("لطفاً روز تولد خود را وارد کنید (مثلاً: 17)")
-    return DAY
+async def language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    lang = query.data
+    user_data_store[query.from_user.id] = {"lang": lang}
+    await query.message.reply_text(f"زبان انتخاب شد: {lang}")
+    return GET_BIRTHDATE
 
-async def get_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['day'] = int(update.message.text)
-    await update.message.reply_text("ماه تولد خود را وارد کنید (مثلاً: 5)")
-    return MONTH
-
-async def get_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['month'] = int(update.message.text)
-    await update.message.reply_text("سال تولد خود را وارد کنید (مثلاً: 1990)")
-    return YEAR
-
-async def get_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['year'] = int(update.message.text)
-    await update.message.reply_text("ساعت تولد (اختیاری، اگر ندارید 12 وارد کنید)")
-    return HOUR
-
-async def get_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    context.user_data['hour'] = int(text) if text.isdigit() else 12
-    await update.message.reply_text("دقیقه تولد (اختیاری، اگر ندارید 0 وارد کنید)")
-    return MINUTE
-
-async def get_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    context.user_data['minute'] = int(text) if text.isdigit() else 0
-    await update.message.reply_text("لطفاً نام شهر یا مکان تولد خود را وارد کنید (مثلاً: تهران)")
-    return CITY
-
-async def geocode_city(city_name, retries=3, delay=1):
-    """تابع کمکی برای geocode با retry"""
-    for attempt in range(retries):
-        try:
-            location = geolocator.geocode(city_name, timeout=10)
-            if location:
-                return location
-        except (GeocoderTimedOut, GeocoderUnavailable):
-            await asyncio.sleep(delay)
-    return None
-
-async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    city_name = update.message.text.strip()
-    location = await geocode_city(city_name)
-    if location:
-        context.user_data['lat'] = location.latitude
-        context.user_data['lon'] = location.longitude
-
-        data = context.user_data
-        text, img_path = get_horoscope_with_image(
-            year=data['year'], month=data['month'], day=data['day'],
-            hour=data['hour'], minute=data['minute'],
-            lat=data['lat'], lon=data['lon']
-        )
-        await update.message.reply_photo(photo=open(img_path, 'rb'), caption=text)
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text(
-            "شهر وارد شده پیدا نشد یا سرویس موقعیت‌یابی پاسخ نداد. لطفاً دوباره تلاش کنید."
-        )
-        return CITY
+    try:
+        birth_date = datetime.strptime(text, "%Y-%m-%d")
+        user_data_store[update.message.from_user.id]["birth_date"] = birth_date
+        horoscope = generate_horoscope_text(birth_date, user_data_store[update.message.from_user.id]["lang"])
+        await update.message.reply_text(horoscope)
+    except Exception as e:
+        await update.message.reply_text("فرمت تاریخ اشتباه است. لطفاً YYYY-MM-DD وارد کنید.")
+    return SHOW_HOROSCOPE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("عملیات لغو شد.")
+    await update.message.reply_text("لغو شد.")
     return ConversationHandler.END
 
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+app = ApplicationBuilder().token(TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(horoscope_start, pattern='horoscope')],
-        states={
-            DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_day)],
-            MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_month)],
-            YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_year)],
-            HOUR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_hour)],
-            MINUTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_minute)],
-            CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_city)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('start', start)],
+    states={
+        SELECT_LANGUAGE: [CallbackQueryHandler(language_choice)],
+        GET_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_birthdate)],
+        SHOW_HOROSCOPE: []
+    },
+    fallbacks=[CommandHandler('cancel', cancel)]
+)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
+app.add_handler(conv_handler)
 
-    print("Bot is running with webhook...")
-
-    # راه‌اندازی وبهوک
+if __name__ == "__main__":
+    print("Bot is starting with webhook...")
+    PORT = int(os.environ.get("PORT", 10000))
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+        webhook_url=f"https://mehrozkiyad-bot.onrender.com/{TOKEN}"
     )
 
-if __name__ == "__main__":
-    main()
