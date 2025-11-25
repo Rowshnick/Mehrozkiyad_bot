@@ -1,4 +1,3 @@
-
 # render.yaml
 services:
   - type: web
@@ -13,6 +12,6 @@ services:
       - key: TELEGRAM_TOKEN
         value: 8555233519:AAFeKZgy4xGYjl_ibUEmVuC7HHv-Eo0FCww
         sync: false
-      - key: webhook_url
+      - key: WEBHOOK_URL
         value: https://mehrozkiyad_bot.onrender.com/webhook
         sync: false
