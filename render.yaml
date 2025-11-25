@@ -13,6 +13,6 @@ services:
       - key: BOT_TOKEN
         value: 8555233519:AAFeKZgy4xGYjl_ibUEmVuC7HHv-Eo0FCww
         sync: false
-      - key: WEBHOOK_URL
+      - key: webhook_url
         value: https://mehrozkiyad_bot.onrender.com/webhook
         sync: false
