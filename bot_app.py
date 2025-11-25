@@ -1,4 +1,4 @@
-# bot_app.py - نسخه اصلاح شده برای محیط WebHook
+# bot_app.py - نسخه اصلاح شده با حذف کامل سرویس 'فال حافظ'
 
 import os
 import logging
@@ -11,19 +11,17 @@ from telegram.ext import (
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 
-# فرض می‌شود این ماژول‌ها در دایرکتوری utils موجود و قابل دسترس هستند
+# ماژول‌های باقی‌مانده
 from utils.horoscope_service import get_horoscope_with_image
 from utils.healing_service import get_healing_text
-# from utils.date_conv import gregorian_to_jalali, jalali_to_gregorian # فعلاً در کد اصلی استفاده نشده
-from utils.hafez_service import get_random_hafez_verse 
+from utils.date_conv import gregorian_to_jalali, jalali_to_gregorian
+# خط مربوط به hafez_service حذف شد.
 
-# --- تنظیمات اولیه و متغیرهای محیطی ---
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# این آدرس باید آدرس عمومی (Public URL) سرور شما باشد، مثال: https://mehrozkiyad-bot.onrender.com
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
-PORT = int(os.environ.get("PORT", 5000)) # استفاده از پورت 5000 یا متغیر محیطی PORT
+PORT = int(os.environ.get("PORT", 5000)) 
 
 # مراحل دریافت داده‌ها
 DAY, MONTH, YEAR, HOUR, MINUTE, CITY = range(6)
@@ -36,7 +34,7 @@ app = Flask(__name__)
 
 # --- توابع ربات ---
 
-# --- استارت و منو (اصلاح شده) ---
+# --- استارت و منو (اصلاح شده: حذف دکمه فال حافظ) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     نمایش منوی اصلی. پیام قبلی را در صورت فراخوانی از طریق دکمه، ویرایش می‌کند.
@@ -47,7 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("چارت تولد (ستاره شناسی)", callback_data='chart')],
         [InlineKeyboardButton("فروشگاه محصولات درمانی", callback_data='shop')],
         [InlineKeyboardButton("عضویت در ربات", callback_data='register')],
-        [InlineKeyboardButton("فال حافظ", callback_data='hafez')],
+        # [InlineKeyboardButton("فال حافظ", callback_data='hafez')],  <- حذف شد
         [InlineKeyboardButton("درباره ما", callback_data='about')],
         [InlineKeyboardButton("معرفی ربات", callback_data='intro')]
     ]
@@ -55,18 +53,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = "سلام! من بات حرفه‌ای هستم. یکی از گزینه‌ها را انتخاب کنید:"
     
     if update.message:
-        # اگر از طریق دستور /start فراخوانی شده
         await update.message.reply_text(message_text, reply_markup=reply_markup)
     elif update.callback_query:
-        # اگر از طریق دکمه‌ها (مثلاً از کنسل شدن یک فرایند) فراخوانی شده
         query = update.callback_query
         await query.answer()
-        # پیام قبلی را ویرایش می‌کنیم تا از ارسال پیام‌های اضافی جلوگیری شود
         await query.message.edit_text(message_text, reply_markup=reply_markup)
 
 
-# --- هوروسکوپ ---
-# (توابع horoscope_start تا get_city بدون تغییر مهم باقی می‌مانند)
+# --- هوروسکوپ (با مدیریت خطای بهتر) ---
 async def horoscope_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text("لطفاً روز تولد خود را وارد کنید (مثلاً: 17)")
@@ -102,7 +96,6 @@ async def get_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    # اضافه شدن مدیریت خطا برای ورودی غیرعددی
     try:
         context.user_data['hour'] = int(text) if text.isdigit() else 12
         await update.message.reply_text("دقیقه تولد (اختیاری، اگر ندارید 0 وارد کنید)")
@@ -115,7 +108,6 @@ async def get_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    # اضافه شدن مدیریت خطا برای ورودی غیرعددی
     try:
         context.user_data['minute'] = int(text) if text.isdigit() else 0
     except Exception:
@@ -129,7 +121,7 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("در حال پردازش درخواست شما... لطفاً صبر کنید.")
     
     try:
-        location = geolocator.geocode(city_name, timeout=20) # افزایش تایم‌آوت
+        location = geolocator.geocode(city_name, timeout=20)
         if location:
             context.user_data['lat'] = location.latitude
             context.user_data['lon'] = location.longitude
@@ -140,7 +132,6 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 hour=data['hour'], minute=data['minute'],
                 lat=data['lat'], lon=data['lon']
             )
-            # ارسال عکس و کپشن
             await update.message.reply_photo(photo=open(img_path, 'rb'), caption=text)
             return ConversationHandler.END
         else:
@@ -158,23 +149,16 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- درمان (هیولینگ) ---
 async def healing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # از context.bot.send_message برای پاسخ در CallbackQuery استفاده کنید
     query = update.callback_query
     await query.answer()
     text = get_healing_text()
     await query.message.reply_text(text)
-    # نیازی به بازگشت ConversationHandler.END نیست مگر اینکه در یک ConversationHandler باشید.
 
 # --- فال حافظ ---
-async def hafez_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    verse = get_random_hafez_verse()
-    await query.message.reply_text(f"فال حافظ شما:\n\n{verse}")
+# تابع hafez_start حذف شد.
 
 # --- لغو ---
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # فراخوانی start برای بازگشت به منوی اصلی
     await start(update, context)
     return ConversationHandler.END
 
@@ -199,12 +183,13 @@ horoscope_conv = ConversationHandler(
 app_bot.add_handler(CommandHandler("start", start))
 app_bot.add_handler(horoscope_conv)
 app_bot.add_handler(CallbackQueryHandler(healing_start, pattern='^healing$'))
-app_bot.add_handler(CallbackQueryHandler(hafez_start, pattern='^hafez$'))
-# در صورت نیاز به بازگشت به منو از دکمه‌ها
+# خط مربوط به هندلر hafez_start حذف شد.
+
+# هندلرهای منو برای دکمه‌های ساده
 app_bot.add_handler(CallbackQueryHandler(start, pattern='^intro$|^about$|^shop$|^register$'))
 
 
-# --- Flask route for webhook (اصلاح شده) ---
+# --- Flask route for webhook ---
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """
@@ -212,16 +197,11 @@ def webhook():
     """
     if request.method == "POST":
         try:
-            # تلگرام یک JSON با آپدیت می‌فرستد.
-            # استفاده از Update.de_json برای تبدیل داده‌های JSON به آبجکت Update
             update = Update.de_json(request.get_json(force=True), app_bot.bot)
-            
-            # استفاده از process_update برای پردازش مستقیم آپدیت (مخصوص وب‌هوک)
             app_bot.process_update(update)
             
         except Exception as e:
             logging.error(f"Error processing update: {e}")
-            # مهم است که حتی در صورت خطا، 'ok' برگردانده شود تا تلگرام مجدداً تلاش نکند
         return "ok"
     return "Method not allowed", 405
 
@@ -233,7 +213,6 @@ if __name__ == "__main__":
     
     # 1. تنظیم وب‌هوک
     try:
-        # حذف هر وب‌هوک قدیمی (اختیاری، اما توصیه می‌شود)
         app_bot.bot.delete_webhook() 
         webhook_url_full = f"{WEBHOOK_URL}/webhook"
         logging.info(f"Setting webhook to: {webhook_url_full}")
@@ -243,7 +222,4 @@ if __name__ == "__main__":
 
     # 2. اجرای سرور Flask
     logging.info(f"Flask App running on port {PORT}")
-    # اگر از Gunicorn یا مشابه آن استفاده می‌کنید، این خط در Production اجرا نخواهد شد
-    # اما برای اجرای لوکال یا دیباگ مناسب است.
     app.run(host="0.0.0.0", port=PORT)
-
