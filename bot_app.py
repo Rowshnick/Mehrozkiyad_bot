@@ -8,7 +8,6 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, filters, ContextTypes
 )
 # برای اجرای بهتر در محیط Flask، از AsyncHTTPRequester استفاده می‌کنیم
-from telegram.ext._application import BaseApplication
 from telegram.request import HTTPXRequest 
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
@@ -234,12 +233,13 @@ app_bot.add_handler(CallbackQueryHandler(start, pattern='^intro$|^about$|^shop$|
 
 # **حذف تابع run_async که باعث خطای Loop می‌شد**
 
-async def set_webhook_async(application: BaseApplication):
+
+
+async def set_webhook_async(application):
     """تنظیم وب‌هوک به صورت ناهمزمان"""
     webhook_url_full = WEBHOOK_URL + "/webhook" # اضافه کردن مسیر webhook به URL اصلی
     logging.info(f"Setting webhook to: {webhook_url_full}")
     await application.bot.set_webhook(webhook_url_full)
-
 
 # **اصلاح تابع webhook برای استفاده از loop موجود و مدیریت صحیح ناهمزمانی**
 @app.route("/webhook", methods=["POST"])
