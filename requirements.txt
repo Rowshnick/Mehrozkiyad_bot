@@ -11,4 +11,4 @@ python-dotenv==1.0.1
 geopy==2.4.0
 flask==2.3.3
 gunicorn
-uvicorn[standard
+uvicorn[standard]
