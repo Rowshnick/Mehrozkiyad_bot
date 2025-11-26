@@ -54,6 +54,7 @@ def _run_geocode_sync(city_name):
 
 def _run_horoscope_sync(data):
     """تابع همگام برای تولید هوروسکوپ و تصویر (محاسبات و I/O)"""
+    # اطمینان از اینکه داده‌های ورودی عددی هستند.
     return get_horoscope_with_image(
         year=data['year'], month=data['month'], day=data['day'],
         hour=data['hour'], minute=data['minute'],
@@ -65,7 +66,6 @@ def _run_horoscope_sync(data):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     نمایش منوی اصلی به صورت Inline Keyboard.
-    اصلاح شده برای اطمینان از نمایش کلیدها و مدیریت callback/message.
     """
     keyboard = [
         [InlineKeyboardButton("هوروسکوپ (ستاره شناسی)", callback_data='horoscope')],
@@ -82,19 +82,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        # ویرایش پیام قبلی برای نمایش منو
         await query.message.edit_text(message_text, reply_markup=reply_markup)
         
     elif update.message:
-        # ارسال پیام جدید برای فرمان /start
         await update.message.reply_text(message_text, reply_markup=reply_markup)
         
     else:
-        # در حالت‌های دیگر
         await context.bot.send_message(update.effective_chat.id, message_text, reply_markup=reply_markup)
 
 
-# --- هوروسکوپ (اصلاح شده برای جلوگیری از تکرار سؤال در صورت خطای ValueError) ---
+# --- هوروسکوپ (با هندلرهای مقاوم در برابر ValueError) ---
 
 async def horoscope_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -134,7 +131,8 @@ async def get_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         text = normalize_digits(update.message.text)
-        context.user_data['hour'] = int(text) if text.isdigit() else 12
+        # فقط در صورتی به int تبدیل کن که حاوی رقم باشد (برای مدیریت ورودی‌های خالی احتمالی)
+        context.user_data['hour'] = int(text) if text.isdigit() else 12 
         await update.message.reply_text("دقیقه تولد (اختیاری، اگر ندارید 0 وارد کنید) ⏱️")
         return MINUTE
     except ValueError:
@@ -188,6 +186,7 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("خطا در اتصال به سرویس موقعیت‌یابی، دوباره تلاش کنید.")
         return CITY
     except Exception as e:
+        # این خطا می‌تواند ناشی از مشکل در get_horoscope_with_image باشد.
         logging.error(f"Error in get_city (Final stage error): {e}")
         await update.message.reply_text("خطایی رخ داد. لطفاً مطمئن شوید اطلاعات ورودی معتبر هستند.")
         return CITY
@@ -257,15 +256,13 @@ def webhook():
         try:
             update = Update.de_json(request.get_json(force=True), app_bot.bot)
             
-            # اجرای پردازش به صورت Async
             async def process():
                 await app_bot.initialize()
                 await app_bot.process_update(update)
 
-            # فراخوانی تابع Async و انتظار تا اتمام آن
             run_async(process())
             
-            # **پاسخ فوری به تلگرام برای جلوگیری از ارسال مجدد آپدیت**
+            # پاسخ فوری به تلگرام برای جلوگیری از ارسال مجدد آپدیت
             return "ok", 200 
         except Exception as e:
             logging.error(f"Error processing webhook update: {e}")
