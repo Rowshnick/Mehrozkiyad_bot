@@ -7,8 +7,8 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ConversationHandler, MessageHandler, filters, ContextTypes
 )
-# برای اجرای بهتر در محیط Flask، از AsyncHTTPRequester استفاده می‌کنیم
-from telegram.request import HTTPXRequest 
+# توجه: نیازی به import کردن BaseApplication از مسیر داخلی نیست.
+
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 
@@ -32,13 +32,11 @@ DAY, MONTH, YEAR, HOUR, MINUTE, CITY = range(6)
 geolocator = Nominatim(user_agent="horoscope_bot")
 
 # --- Flask App ---
-# در حالت واقعی، Flask برای Webhook باید به صورت async اجرا شود (مثلاً با Uvicorn/Gunicorn)
 app = Flask(__name__)
 
 # ----------------- توابع کمکی -----------------
-
 def normalize_digits(text: str) -> str:
-    """تبدیل ارقام فارسی/عربی به ارقام استاندارد (ASCII)"""
+    # ... (بدون تغییر)
     if not isinstance(text, str):
         return str(text)
         
@@ -52,13 +50,9 @@ def normalize_digits(text: str) -> str:
     return ''.join(mapping.get(c, c) for c in text)
 
 def _run_geocode_sync(city_name):
-    """تابع همگام برای فراخوانی geolocator (I/O مسدودکننده)"""
-    # توجه: این تابع در یک Threadpool اجرا خواهد شد.
     return geolocator.geocode(city_name, timeout=20)
 
 def _run_horoscope_sync(data):
-    """تابع همگام برای تولید هوروسکوپ و تصویر (محاسبات و I/O)"""
-    # توجه: این تابع در یک Threadpool اجرا خواهد شد.
     return get_horoscope_with_image(
         year=data['year'], month=data['month'], day=data['day'],
         hour=data['hour'], minute=data['minute'],
@@ -68,7 +62,7 @@ def _run_horoscope_sync(data):
 # ----------------- توابع ربات (Async) -----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش منوی اصلی به صورت Inline Keyboard."""
+    # ... (بدون تغییر)
     keyboard = [
         [InlineKeyboardButton("هوروسکوپ (ستاره شناسی)", callback_data='horoscope')],
         [InlineKeyboardButton("درمان (هیولینگ)", callback_data='healing')],
@@ -92,9 +86,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await context.bot.send_message(update.effective_chat.id, message_text, reply_markup=reply_markup)
 
-
-# --- هوروسکوپ (بدون تغییر در منطق مکالمه) ---
-
+# توابع get_day, get_month, get_year, get_hour, get_minute, get_city, healing_start, cancel
+# ... (بدون تغییر)
 async def horoscope_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text("لطفاً روز تولد خود را وارد کنید (مثلاً: 17) 📅")
@@ -152,14 +145,10 @@ async def get_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    دریافت نام شهر و اجرای فرایندهای سنگین (با asyncio.to_thread برای رفع مشکل blocking)
-    """
     city_name = update.message.text.strip()
     await update.message.reply_text("در حال پردازش درخواست شما... لطفاً صبر کنید. ⏳")
     
     try:
-        # **گام ۱: Geocoding (اجرای Blocking I/O در یک ترد مجزا)**
         location = await asyncio.to_thread(_run_geocode_sync, city_name) 
 
         if location:
@@ -168,10 +157,8 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             data = context.user_data
             
-            # **گام ۲: تولید هوروسکوپ (اجرای Blocking محاسبات در یک ترد مجزا)**
             text, img_path = await asyncio.to_thread(_run_horoscope_sync, data)
             
-            # گام ۳: پاسخ به کاربر
             if img_path and os.path.exists(img_path):
                  await update.message.reply_photo(photo=open(img_path, 'rb'), caption=text)
             else:
@@ -191,22 +178,19 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("خطایی رخ داد. لطفاً مطمئن شوید اطلاعات ورودی معتبر هستند.")
         return CITY
 
-
-# --- درمان (هیولینگ) ---
 async def healing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = get_healing_text()
     await query.message.reply_text(text)
 
-# --- لغو ---
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context) 
     return ConversationHandler.END
 
+
 # ----------------- Dispatcher / Application -----------------
 
-# استفاده از HTTPXRequest برای پایداری بیشتر در محیط‌های ناهمزمان
 app_bot = ApplicationBuilder().token(TOKEN).rate_limit_delay(1).build()
 
 horoscope_conv = ConversationHandler(
@@ -229,34 +213,29 @@ app_bot.add_handler(CallbackQueryHandler(healing_start, pattern='^healing$'))
 app_bot.add_handler(CallbackQueryHandler(start, pattern='^intro$|^about$|^shop$|^register$|^chart$'))
 
 
-# ----------------- توابع Flask و Webhook (اصلاح شده) -----------------
+# ----------------- توابع Flask و Webhook -----------------
 
-# **حذف تابع run_async که باعث خطای Loop می‌شد**
-
-
-
+# **اصلاح شد:** پارامتر application نوع‌دهی آن حذف شد تا مشکل ImportError رفع شود.
 async def set_webhook_async(application):
     """تنظیم وب‌هوک به صورت ناهمزمان"""
-    webhook_url_full = WEBHOOK_URL + "/webhook" # اضافه کردن مسیر webhook به URL اصلی
+    webhook_url_full = WEBHOOK_URL + "/webhook" 
     logging.info(f"Setting webhook to: {webhook_url_full}")
     await application.bot.set_webhook(webhook_url_full)
 
-# **اصلاح تابع webhook برای استفاده از loop موجود و مدیریت صحیح ناهمزمانی**
+
+# **استفاده از async در webhook برای اجرای uvicorn**
 @app.route("/webhook", methods=["POST"])
 async def webhook():
     """
     پردازش به‌روزرسانی‌های دریافتی از تلگرام به صورت ناهمزمان.
-    **نکته: برای اجرای این تابع به صورت async باید از یک سرور ASGI (مانند Uvicorn) استفاده کنید.**
-    اگر از 'python bot_app.py' در Render استفاده می‌کنید، ممکن است نیاز به تغییر دستور اجرا در Render داشته باشید.
     """
     if request.method == "POST":
         try:
-            update = Update.de_json(await request.get_json(force=True), app_bot.bot)
+            # استفاده از await request.get_json به جای request.get_json
+            update = Update.de_json(await request.get_json(force=True), app_bot.bot) 
             
-            # اجرای process_update
             await app_bot.process_update(update)
             
-            # پاسخ فوری 200 OK
             return "ok", 200 
             
         except Exception as e:
@@ -271,9 +250,8 @@ if __name__ == "__main__":
     if not TOKEN or not WEBHOOK_URL:
         print("Error: TELEGRAM_TOKEN or WEBHOOK_URL not set.")
     else:
-        # **ابتدا وب‌هوک را تنظیم و سپس سرور را اجرا می‌کنیم.**
         try:
-            # ایجاد یک Loop جدید برای تنظیم وب‌هوک (چون در main thread هنوز Loop فعال نیست)
+            # ایجاد یک Loop جدید برای تنظیم وب‌هوک
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(set_webhook_async(app_bot))
@@ -282,10 +260,7 @@ if __name__ == "__main__":
 
         logging.info(f"Flask App running on port {PORT}")
         
-        # **توجه: برای اجرای تابع async webhook، نیاز به اجرای Flask با یک سرور ASGI دارید.**
-        # **اگر دستور اجرای Render شما 'python bot_app.py' است، آن را به موارد زیر تغییر دهید:**
-        # gunicorn -w 4 -k uvicorn.workers.UvicornWorker bot_app:app
-        
+        # اگر از Start Command با Gunicorn/Uvicorn استفاده می‌کنید، این خط اجرا نمی‌شود.
+        # اما برای محیط‌های توسعه لوکال کاربرد دارد.
         app.run(host="0.0.0.0", port=PORT)
-
 
