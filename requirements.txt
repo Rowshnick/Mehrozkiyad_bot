@@ -9,3 +9,6 @@ httpx~=0.27
 pytz==2025.2
 python-dotenv==1.0.1
 geopy==2.4.0
+flask==2.3.3
+gunicorn
+uvicorn[standard
