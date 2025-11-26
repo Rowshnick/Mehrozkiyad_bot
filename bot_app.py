@@ -1,5 +1,4 @@
 # bot_app.py
-
 import os
 import logging
 import asyncio
@@ -208,4 +207,4 @@ def home():
 
 # تابع لضبط Webhook بشكل متزامن
 def set_webhook_sync():
-    """تنظیم وب‌هوک به صورت همزمان با
+    """تنظیم وب‌هوک به صورت همزمان با"""
