@@ -191,7 +191,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----------------- Dispatcher / Application -----------------
 
-app_bot = ApplicationBuilder().token(TOKEN).rate_limit_delay(1).build()
+app_bot = ApplicationBuilder().token(TOKEN).rate_limiter(1).build()
 
 horoscope_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(horoscope_start, pattern='^horoscope$')],
