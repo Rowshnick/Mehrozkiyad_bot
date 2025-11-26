@@ -209,7 +209,7 @@ def webhook():
 
 # --- تابع تنظیم وب‌هوک هنگام استارت ---
 async def set_webhook_async():
-    webhook_url_full = f"{WEBHOOK_URL}/webhook"
+    webhook_url_full = f"{WEBHOOK_URL}"
     logging.info(f"Setting webhook to: {webhook_url_full}")
     await app_bot.bot.set_webhook(webhook_url_full)
 
