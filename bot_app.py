@@ -32,7 +32,22 @@ geolocator = Nominatim(user_agent="horoscope_bot")
 # --- Flask App ---
 app = Flask(__name__)
 
-# ----------------- توابع کمکی همگام (برای اجرای در ترد مجزا) -----------------
+# ----------------- توابع کمکی -----------------
+
+def normalize_digits(text: str) -> str:
+    """تبدیل ارقام فارسی/عربی به ارقام استاندارد (ASCII)"""
+    if not isinstance(text, str):
+        return str(text)
+        
+    mapping = {
+        '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+        '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+        '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+    }
+    # ابتدا فضاها و کاراکترهای مخفی را حذف می‌کنیم
+    text = text.strip() 
+    return ''.join(mapping.get(c, c) for c in text)
 
 def _run_geocode_sync(city_name):
     """تابع همگام برای فراخوانی geolocator (I/O مسدودکننده)"""
@@ -77,7 +92,9 @@ async def horoscope_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data['day'] = int(update.message.text)
+        # **اصلاح شده**
+        day_text = normalize_digits(update.message.text)
+        context.user_data['day'] = int(day_text)
         await update.message.reply_text("ماه تولد خود را وارد کنید (مثلاً: 5)")
         return MONTH
     except ValueError:
@@ -86,7 +103,9 @@ async def get_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data['month'] = int(update.message.text)
+        # **اصلاح شده**
+        month_text = normalize_digits(update.message.text)
+        context.user_data['month'] = int(month_text)
         await update.message.reply_text("سال تولد خود را وارد کنید (مثلاً: 1990)")
         return YEAR
     except ValueError:
@@ -95,7 +114,9 @@ async def get_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data['year'] = int(update.message.text)
+        # **اصلاح شده**
+        year_text = normalize_digits(update.message.text)
+        context.user_data['year'] = int(year_text)
         await update.message.reply_text("ساعت تولد (اختیاری، اگر ندارید 12 وارد کنید)")
         return HOUR
     except ValueError:
@@ -103,21 +124,18 @@ async def get_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return YEAR
 
 async def get_hour(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = normalize_digits(update.message.text) # **اصلاح شده**
     context.user_data['hour'] = int(text) if text.isdigit() else 12
     await update.message.reply_text("دقیقه تولد (اختیاری، اگر ندارید 0 وارد کنید)")
     return MINUTE
 
 async def get_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = normalize_digits(update.message.text) # **اصلاح شده**
     context.user_data['minute'] = int(text) if text.isdigit() else 0
     await update.message.reply_text("لطفاً نام شهر یا مکان تولد خود را وارد کنید (مثلاً: تهران)")
     return CITY
 
 async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    دریافت نام شهر و اجرای فرایندهای سنگین (Geocode و محاسبات هوروسکوپ) در یک ترد جداگانه
-    """
     city_name = update.message.text.strip()
     await update.message.reply_text("در حال پردازش درخواست شما... لطفاً صبر کنید.")
     
@@ -132,6 +150,7 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = context.user_data
             
             # **اجرای تولید هوروسکوپ در یک ترد مجزا**
+            # **نکته:** داده‌های 'day', 'month', 'year' اکنون با ارقام ASCII هستند.
             text, img_path = await asyncio.to_thread(_run_horoscope_sync, data)
             
             if img_path and os.path.exists(img_path):
@@ -149,7 +168,8 @@ async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("خطا در اتصال به سرویس موقعیت‌یابی، دوباره تلاش کنید.")
         return CITY
     except Exception as e:
-        logging.error(f"Error in get_city: {e}")
+        # این خطا اکنون فقط در صورت وجود مشکل در منطق get_horoscope_with_image رخ می‌دهد.
+        logging.error(f"Error in get_city (Final stage error): {e}")
         await update.message.reply_text("خطایی رخ داد. لطفاً مطمئن شوید اطلاعات ورودی معتبر هستند.")
         return CITY
 
@@ -222,7 +242,7 @@ def webhook():
             
             # اجرای پردازش به صورت Async
             async def process():
-                await app_bot.initialize() # اطمینان از لود شدن بات
+                await app_bot.initialize()
                 await app_bot.process_update(update)
 
             run_async(process())
@@ -237,7 +257,6 @@ def webhook():
 
 # --- تابع تنظیم وب‌هوک هنگام استارت ---
 async def set_webhook_async():
-    # آدرس وب‌هوک فقط باید متغیر محیطی باشد، چون آدرس /webhook را Flask خودش هندل می‌کند.
     webhook_url_full = WEBHOOK_URL 
     logging.info(f"Setting webhook to: {webhook_url_full}")
     await app_bot.bot.set_webhook(webhook_url_full)
@@ -250,7 +269,6 @@ if __name__ == "__main__":
     else:
         # اجرای تنظیم وب‌هوک (فقط یک بار هنگام شروع)
         try:
-            # ابتدا وب‌هوک را تنظیم کن
             run_async(set_webhook_async())
         except Exception as e:
             logging.error(f"Failed to set webhook: {e}")
