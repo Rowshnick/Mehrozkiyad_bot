@@ -12,3 +12,4 @@ geopy==2.4.0
 flask==2.3.3
 gunicorn
 uvicorn[standard]
+Flask[async]==2.3.3
