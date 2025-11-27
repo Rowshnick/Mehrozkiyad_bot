@@ -13,3 +13,7 @@ flask==2.3.3
 gunicorn
 uvicorn[standard]
 Flask[async]==2.3.3
+fastapi
+uvicorn
+python-telegram-bot
+
