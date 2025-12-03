@@ -1,124 +1,112 @@
-import os
 import datetime
-from pathlib import Path
-from skyfield.api import load, Topos, Angle, Loader, EarthSatellite, wgs84
+from skyfield.api import load, Topos, Star, Earth, Angle, utc
 from skyfield.framelib import ecliptic_frame
-import numpy as np
 
-# ایمپورت مطلق (برای دسترسی به داده‌های ثابت مانند نشانه‌های زودیاک)
-import data_lookup 
-
-# =================================================================
-# 1. راه‌اندازی Skyfield: لودر و Ephemeris (خودکار دانلود/لود ایمن)
-# =================================================================
-
-# تعریف مسیری برای کش کردن فایل های داده (مانند de421.bsp) در سرور.
-# Skyfield به طور خودکار فایل را در این پوشه دانلود و ذخیره می کند.
-# توجه: این مسیر باید در محیط ابری قابل نوشتن باشد.
-data_dir = Path('./skyfield_temp_data')
-
-# ایجاد شیء Loader
-load_with_cache = Loader(data_dir)
-
-# لود Ephemeris و Timescale با استفاده از Loader سفارشی
-# اگر فایل de421.bsp در پوشه skyfield_temp_data وجود نداشته باشد، دانلود می‌شود.
+# مطمئن شوید که Skyfield فایل ephemeris را دانلود کرده است.
+# این تابع فقط برای تست و جلوگیری از خطای ایمپورت/محاسبات قرار داده شده است.
 try:
-    eph = load_with_cache('de421.bsp')
-    # ts (timescale) نیز باید با استفاده از همان شیء Loader ایجاد شود.
-    ts = load_with_cache.timescale() 
-except Exception as e:
-    # در صورت بروز خطا در دانلود (مانند نبود دسترسی به اینترنت)، 
-    # به لود استاندارد بازمی‌گردیم که فرض می‌کند فایل از قبل دستی آپلود شده است.
-    print(f"Error loading ephemeris or timescale: {e}. Falling back to standard load.")
-    # توجه: اگر خطا رخ دهد و فایل دستی هم موجود نباشد، برنامه از کار می‌افتد.
-    eph = load('de421.bsp')
+    # Skyfield با موفقیت فایل de421.bsp را در دیپلوی قبلی شما دانلود کرد.
+    data = load('de421.bsp') 
     ts = load.timescale()
+    earth = data['earth']
+except Exception as e:
+    print(f"WARNING: Skyfield data loading failed in placeholder: {e}")
+    # اگر Skyfield fail کند، محاسبات Placeholder همچنان اجرا می‌شوند.
 
-# =================================================================
-# 2. توابع اصلی
-# =================================================================
 
-def calculate_natal_chart(dt_utc: datetime.datetime, latitude: float, longitude: float, elevation: float = 0):
+# ======================================================================
+# تابع تطبیق درجه با نشانه زودیاک
+# (این تابع باید از data_lookup.py استفاده کند، اما برای سادگی اینجا تعریف می‌شود)
+# ======================================================================
+
+def get_zodiac_sign(longitude_degrees: float) -> tuple[str, str]:
+    """تبدیل درجه طول جغرافیایی به نام نشانه زودیاک فارسی و انگلیسی."""
+    
+    # لیست نشانه‌ها (Aries=0, Taurus=30, ...)
+    ZODIAC_SIGNS = [
+        (0, "Aries", "حمل"), (30, "Taurus", "ثور"), (60, "Gemini", "جوزا"), 
+        (90, "Cancer", "سرطان"), (120, "Leo", "اسد"), (150, "Virgo", "سنبله"), 
+        (180, "Libra", "میزان"), (210, "Scorpio", "عقرب"), (240, "Sagittarius", "قوس"), 
+        (270, "Capricorn", "جدی"), (300, "Aquarius", "دلو"), (330, "Pisces", "حوت"),
+    ]
+
+    # محاسبه درجه در دایره 0 تا 360
+    long_norm = longitude_degrees % 360
+
+    # پیدا کردن نشانه
+    for i in range(len(ZODIAC_SIGNS)):
+        start_degree = ZODIAC_SIGNS[i][0]
+        # درجه پایان نشانه فعلی، همان درجه شروع نشانه بعدی است (یا 360 برای حوت)
+        end_degree = ZODIAC_SIGNS[(i + 1) % 12][0] if i < 11 else 360
+        
+        # اگر در محدوده معمولی باشد (مثل 100 درجه)
+        if start_degree <= long_norm < end_degree:
+            return ZODIAC_SIGNS[i][1], ZODIAC_SIGNS[i][2] # (انگلیسی، فارسی)
+        
+        # اگر محدوده از 360 عبور کند (که در این ساختار ساده اتفاق نمی افتد)
+
+    # اگر چیزی پیدا نشد، Aries را برمی‌گردانیم.
+    return "Aries", "حمل"
+
+# ======================================================================
+# تابع اصلی
+# ======================================================================
+
+def calculate_natal_chart(dt_utc: datetime.datetime, latitude: float, longitude: float, elevation: float = 0.0) -> dict:
     """
-    محاسبه موقعیت خورشید، ماه و Ascendant.
-    
-    توجه: این تابع فقط موقعیت سیارات را در دایرةالبروج محاسبه می‌کند. 
-    محاسبه دقیق House System (مانند Placidus) نیاز به یک کتابخانه جداگانه دارد.
+    محاسبه موقعیت سیارات اصلی (خورشید، ماه) در زمان و مکان مشخص.
     """
     
-    # تعریف زمان Skyfield
-    t = ts.utc(dt_utc.year, dt_utc.month, dt_utc.day, dt_utc.hour, dt_utc.minute, dt_utc.second)
-    
-    # تعریف ناظر در زمین (محل تولد)
-    location = Topos(latitude_degrees=latitude, longitude_degrees=longitude, elevation_m=elevation)
-    
-    # تعریف سیارات اصلی مورد نیاز
-    planets = {
-        'Sun': eph['sun'],
-        'Moon': eph['moon'],
-    }
-    
-    results = {}
-    
-    # 1. محاسبه موقعیت سیارات (طول دایرةالبروجی)
-    for name, planet in planets.items():
-        # مشاهده سیاره توسط ناظر (محل تولد)
-        astrometric = location.at(t).observe(planet)
-        
-        # تبدیل به مختصات دایرةالبروجی (Ecliptic Coordinates)
-        lon, lat, distance = astrometric.frame_latlon(ecliptic_frame)
-        
-        longitude_degrees = lon.degrees % 360
-        
-        # پیدا کردن نشانه زودیاک
-        sign = get_zodiac_sign(longitude_degrees)
-        
-        results[name] = {
-            'longitude': longitude_degrees,
-            'sign_fa': sign[2], # نام فارسی نشانه
-            'sign_en': sign[1],
+    # 1. تنظیمات زمان و مکان
+    try:
+        # تبدیل زمان UTC به شیء Skyfield Time
+        t = ts.utc(dt_utc.year, dt_utc.month, dt_utc.day, dt_utc.hour, dt_utc.minute, dt_utc.second)
+        # تنظیم مکان ناظر
+        observer = earth + Topos(latitude_degrees=latitude, longitude_degrees=longitude, elevation_m=elevation)
+    except NameError:
+        # اگر Skyfield fail کند (به دلیل عدم دسترسی به ephemeris) یک خروجی ساده برمی‌گردانیم
+        print("WARNING: Skyfield initialization failed. Returning placeholder data.")
+        return {
+            "Sun": {"longitude": "Failed", "sign_en": "Unknown", "sign_fa": "خورشید نامشخص"},
+            "Moon": {"longitude": "Failed", "sign_en": "Unknown", "sign_fa": "ماه نامشخص"},
+            "Ascendant": {"sign_en": "Unknown", "sign_fa": "طالع نامشخص"}
         }
 
-    # 2. محاسبه Ascendant (طالع یا صعودی)
-    # **Placeholder: Skyfield به‌تنهایی این کار را نمی‌کند و نیاز به House System دارد.**
-    results['Ascendant'] = {
-        'longitude': "محاسبه_دقیق_لازم", 
-        'sign_fa': "محاسبه_دقیق_لازم",
+    
+    # 2. محاسبه سیارات اصلی (خورشید و ماه)
+    planets = {
+        "Sun": data['sun'],
+        "Moon": data['moon'],
+        # "Mercury": data['mercury'], # برای سادگی فعلاً حذف شده
+        # "Venus": data['venus'],
+        # "Mars": data['mars'],
     }
     
-    # 3. محاسبه Houseها (خانه دوم، پنجم، ششم، دهم)
-    # **Placeholder: این بخش کاملا نیاز به کتابخانه House System دارد.**
-    results['House_Cusps'] = {
-        '2nd': {'sign_fa': "محاسبه_دقیق_لازم"},
-        '5th': {'sign_fa': "محاسبه_دقیق_لازم"},
-        '6th': {'sign_fa': "محاسبه_دقیق_لازم"},
-        '10th': {'sign_fa': "محاسبه_دقیق_لازم"},
+    natal_data = {}
+    
+    for name, planet in planets.items():
+        # محاسبه موقعیت سیاره نسبت به ناظر (Geocentric) در مختصات دایره البروج (Ecliptic)
+        astrometric = observer.at(t).observe(planet)
+        lon, lat, distance = astrometric.frame_latlon(ecliptic_frame)
+        
+        lon_degrees = lon.degrees
+        sign_en, sign_fa = get_zodiac_sign(lon_degrees)
+        
+        natal_data[name] = {
+            "longitude": lon_degrees, # موقعیت دقیق (درجه)
+            "sign_en": sign_en,
+            "sign_fa": sign_fa,
+            "latitude": lat.degrees,
+            "distance": distance.km
+        }
+
+    # 3. محاسبه Ascendant (طلوعی)
+    # محاسبه Ascendant نیاز به House System دارد که در Skyfield به سادگی در دسترس نیست.
+    # این قسمت را فعلاً Placeholder نگه می‌داریم.
+    natal_data["Ascendant"] = {
+        "sign_en": "Placeholder",
+        "sign_fa": "در حال پیاده‌سازی",
+        "longitude": "N/A"
     }
-    
-    return results
 
-def get_zodiac_sign(ecliptic_longitude: float):
-    """پیدا کردن نشانه زودیاک بر اساس طول دایرةالبروجی (۰-۳۶۰)."""
-    
-    # اطمینان از قرارگیری در محدوده [0, 360)
-    lon = ecliptic_longitude % 360
-    
-    # استفاده از data_lookup.ZODIAC_SIGNS
-    ZODIAC_SIGNS = data_lookup.ZODIAC_SIGNS
-    
-    # لیست نشانه‌ها بر اساس درجه شروع مرتب شده است (ZODIAC_SIGNS)
-    for i in range(len(ZODIAC_SIGNS)):
-        start_deg, name_en, name_fa, element, color, symbol = ZODIAC_SIGNS[i]
-        
-        # درجه شروع نشانه بعدی
-        next_start_deg = ZODIAC_SIGNS[(i + 1) % len(ZODIAC_SIGNS)][0]
-        
-        # منطق تعیین نشانه
-        if next_start_deg == 0:
-            # آخرین نشانه (ماهی) تا 360 درجه ادامه دارد
-            if lon >= start_deg:
-                return ZODIAC_SIGNS[i]
-        elif start_deg <= lon < next_start_deg:
-            return ZODIAC_SIGNS[i]
-
-    return data_lookup.ZODIAC_SIGNS[0] # در صورت خطای غیرمنتظره، حمل برگردانده شود.
+    return natal_data
