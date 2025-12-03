@@ -1,16 +1,42 @@
 import os
 import datetime
-from skyfield.api import load, Topos, EarthSatellite, wgs84
+from pathlib import Path
+from skyfield.api import load, Topos, Angle, Loader, EarthSatellite, wgs84
 from skyfield.framelib import ecliptic_frame
 import numpy as np
 
-# ایمپورت مطلق (اصلاح شده برای محیط دیپلوی تک‌دایرکتوری)
+# ایمپورت مطلق (برای دسترسی به داده‌های ثابت مانند نشانه‌های زودیاک)
 import data_lookup 
 
-# تعریف Skyfield Loader و داده‌های دائمی
-# این بخش فقط یک بار در هنگام راه‌اندازی برنامه (bot_app.py) فراخوانی می‌شود
-eph = load('de421.bsp') # Ephemeris
-ts = load.timescale()
+# =================================================================
+# 1. راه‌اندازی Skyfield: لودر و Ephemeris (خودکار دانلود/لود ایمن)
+# =================================================================
+
+# تعریف مسیری برای کش کردن فایل های داده (مانند de421.bsp) در سرور.
+# Skyfield به طور خودکار فایل را در این پوشه دانلود و ذخیره می کند.
+# توجه: این مسیر باید در محیط ابری قابل نوشتن باشد.
+data_dir = Path('./skyfield_temp_data')
+
+# ایجاد شیء Loader
+load_with_cache = Loader(data_dir)
+
+# لود Ephemeris و Timescale با استفاده از Loader سفارشی
+# اگر فایل de421.bsp در پوشه skyfield_temp_data وجود نداشته باشد، دانلود می‌شود.
+try:
+    eph = load_with_cache('de421.bsp')
+    # ts (timescale) نیز باید با استفاده از همان شیء Loader ایجاد شود.
+    ts = load_with_cache.timescale() 
+except Exception as e:
+    # در صورت بروز خطا در دانلود (مانند نبود دسترسی به اینترنت)، 
+    # به لود استاندارد بازمی‌گردیم که فرض می‌کند فایل از قبل دستی آپلود شده است.
+    print(f"Error loading ephemeris or timescale: {e}. Falling back to standard load.")
+    # توجه: اگر خطا رخ دهد و فایل دستی هم موجود نباشد، برنامه از کار می‌افتد.
+    eph = load('de421.bsp')
+    ts = load.timescale()
+
+# =================================================================
+# 2. توابع اصلی
+# =================================================================
 
 def calculate_natal_chart(dt_utc: datetime.datetime, latitude: float, longitude: float, elevation: float = 0):
     """
@@ -39,7 +65,7 @@ def calculate_natal_chart(dt_utc: datetime.datetime, latitude: float, longitude:
         # مشاهده سیاره توسط ناظر (محل تولد)
         astrometric = location.at(t).observe(planet)
         
-        # تبدیل به مختصات دایرةالبروجی
+        # تبدیل به مختصات دایرةالبروجی (Ecliptic Coordinates)
         lon, lat, distance = astrometric.frame_latlon(ecliptic_frame)
         
         longitude_degrees = lon.degrees % 360
@@ -54,9 +80,7 @@ def calculate_natal_chart(dt_utc: datetime.datetime, latitude: float, longitude:
         }
 
     # 2. محاسبه Ascendant (طالع یا صعودی)
-    # **توجه: محاسبه دقیق Ascendant پیچیده است و به House System بستگی دارد.**
-    # Skyfield به‌تنهایی این کار را نمی‌کند. اینجا فقط یک Placeholder می‌گذاریم.
-    # برای محاسبه دقیق، باید از کتابخانه‌ای مانند Pyswisseph یا AstroPy با تابع محاسبه Houses استفاده کنید.
+    # **Placeholder: Skyfield به‌تنهایی این کار را نمی‌کند و نیاز به House System دارد.**
     results['Ascendant'] = {
         'longitude': "محاسبه_دقیق_لازم", 
         'sign_fa': "محاسبه_دقیق_لازم",
@@ -89,6 +113,7 @@ def get_zodiac_sign(ecliptic_longitude: float):
         # درجه شروع نشانه بعدی
         next_start_deg = ZODIAC_SIGNS[(i + 1) % len(ZODIAC_SIGNS)][0]
         
+        # منطق تعیین نشانه
         if next_start_deg == 0:
             # آخرین نشانه (ماهی) تا 360 درجه ادامه دارد
             if lon >= start_deg:
