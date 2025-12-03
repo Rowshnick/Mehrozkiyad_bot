@@ -128,4 +128,4 @@ async def get_coordinates_from_city(city_name: str) -> Optional[tuple[float, flo
     except Exception as e:
         print(f"Unexpected Geocoding Error for {city_name}: {e}")
         return None
-        
+
