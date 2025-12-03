@@ -4,5 +4,7 @@ pydantic
 skyfield
 numpy
 persiantools
+pytz               # افزوده شد: برای رفع خطای "No module named 'pytz'"
 geopy
 httpx
+jplephem           # افزوده شد: وابستگی مورد نیاز برای Skyfield
