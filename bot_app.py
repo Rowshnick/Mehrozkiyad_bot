@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from skyfield.api import load
 from skyfield.framelib import ecliptic_frame
+import json # اضافه شده برای استفاده احتمالی
 
 # ======================================================================
 # رفع خطای ModuleNotFoundError: ایمپورت‌های مطلق
@@ -16,14 +17,15 @@ try:
     import keyboards
     import astrology_core
     import data_lookup
-    # ایمپورت کردن ماژول‌های سجیل
+    # ایمپورت کردن ماژول‌های سجیل (اگر این فایل‌ها موجود نیستند، لطفا حذف یا ایجاد شوند)
     import main_sajil 
     import sajil_part_one
     import sajil_part_two
 except ImportError as e:
     # این خطا نشان می‌دهد که یکی از فایل‌های کمکی در فرآیند دیپلوی گنجانده نشده است.
     print(f"Error importing local modules: {e}. Ensure all .py files are in the deployment package.")
-    raise # در محیط تولید، اجازه می‌دهیم برنامه با خطا متوقف شود.
+    # اگر utils.py یا keyboards.py گم شده باشند، اینجا خطا متوقف می شود.
+    raise 
 
 # ======================================================================
 # 1. تنظیمات اولیه
@@ -159,43 +161,81 @@ async def handle_text_message(chat_id: int, incoming_text: str):
         
         # --- وضعیت انتظار برای اطلاعات تولد (ASTRO) ---
         if state_data['state'] == 'EXPECTING_BIRTH_INFO':
+            # regex برای تطابق دقیق با فرمت: نام، جنسیت، تاریخ، ساعت، شهر
             match = re.match(r'(.+?)،\s*(.+?)،\s*(\d{4}[/-]\d{1,2}[/-]\d{1,2})،\s*(\d{1,2}:\d{1,2})،\s*(.+)', incoming_text)
             
             if match:
                 name, gender, shamsi_date_str, time_str, city = match.groups()
+                # ترکیب تاریخ و زمان برای تابع تبدیل
                 shamsi_dt = f"{shamsi_date_str} {time_str}:00"
                 
-                dt_utc = utils.parse_shamsi_to_utc_datetime(shamsi_dt)
-                coords = await utils.get_coordinates_from_city(city)
+                print(f"DEBUG: Processing input for {name}, City: {city}") # چاپ برای دیباگ
+
+                try:
+                    # 1. تبدیل تاریخ و زمان
+                    dt_utc = utils.parse_shamsi_to_utc_datetime(shamsi_dt)
+                    
+                    # 2. دریافت مختصات جغرافیایی (Async call)
+                    coords = await utils.get_coordinates_from_city(city)
                 
+                except Exception as e:
+                    # اگر خطایی در توابع utils رخ داد، اینجا گرفته می‌شود.
+                    print(f"CRITICAL UTILS ERROR: {e}")
+                    await utils.send_telegram_message(chat_id, f"❌ خطای داخلی هنگام تبدیل زمان یا مکان: {e}", "Markdown")
+                    CONVERSATION_STATE.pop(chat_id)
+                    return # جلوگیری از ادامه کار
+
+                # بررسی اعتبار داده‌ها
                 if dt_utc and coords:
                     lat, lon = coords
-                    natal_data = astrology_core.calculate_natal_chart(dt_utc, lat, lon)
                     
-                    output = f"✨ **چارت تولد شخصی‌سازی شده برای {name} ({gender})**\n\n"
-                    output += f"📅 **تاریخ شمسی:** {utils.convert_to_shamsi_date(dt_utc)}\n"
-                    output += f"📍 **محل تولد:** {city} (عرض: {lat:.2f}، طول: {lon:.2f})\n\n"
+                    try:
+                        # 3. محاسبه چارت
+                        natal_data = astrology_core.calculate_natal_chart(dt_utc, lat, lon)
+                        
+                        # 4. تولید خروجی
+                        output = f"✨ **چارت تولد شخصی‌سازی شده برای {name} ({gender})**\n\n"
+                        output += f"📅 **تاریخ شمسی:** {utils.convert_to_shamsi_date(dt_utc)}\n"
+                        output += f"📍 **محل تولد:** {city} (عرض: {lat:.2f}، طول: {lon:.2f})\n\n"
+                        
+                        for planet, data in natal_data.items():
+                             # اگر موقعیت محاسبه شده باشد (خاموش کردن Placeholderها)
+                             if planet in ['Sun', 'Moon']:
+                                # اگر داده['longitude'] عدد باشد:
+                                try:
+                                    long_str = f"{data['longitude']:.2f}°"
+                                except TypeError:
+                                     long_str = data['longitude'] # برای Placeholderها
+
+                                output += f"☀️ **{planet} در:** {long_str} {data['sign_fa']}\n"
+                             elif planet == 'Ascendant':
+                                output += f"⬆️ **طالع (صعودی):** {data['sign_fa']}\n"
+                        
+                        output += "\n*توجه: محاسبه Houseها و Ascendant نیاز به کتابخانه نجومی تخصصی‌تر دارد.*"
+                        
+                        await utils.send_telegram_message(chat_id, output, "Markdown", keyboards.astrology_menu_keyboard())
+                        CONVERSATION_STATE.pop(chat_id)
+                        return
                     
-                    for planet, data in natal_data.items():
-                         if planet in ['Sun', 'Moon']:
-                            output += f"☀️ **{planet} در:** {data['longitude']:.2f}° {data['sign_fa']}\n"
-                         elif planet == 'Ascendant':
-                            output += f"⬆️ **طالع (صعودی):** {data['sign_fa']}\n"
-                    
-                    output += "\n*توجه: محاسبه Houseها و Ascendant نیاز به کتابخانه نجومی تخصصی‌تر دارد.*"
-                    
-                    await utils.send_telegram_message(chat_id, output, "Markdown", keyboards.astrology_menu_keyboard())
-                    CONVERSATION_STATE.pop(chat_id)
-                    return
+                    except Exception as e:
+                        # خطاهای محاسباتی در astrology_core
+                        print(f"CRITICAL ASTROLOGY ERROR: {e}")
+                        await utils.send_telegram_message(chat_id, f"❌ خطای حیاتی در محاسبه چارت نجومی: {e}", "Markdown")
+                        CONVERSATION_STATE.pop(chat_id)
+                        return
+                        
                 else:
+                    # خطای عدم اعتبار (تاریخ/ساعت نامعتبر یا شهر پیدا نشد)
                     error_msg = "❌ **خطا در پردازش اطلاعات!**\n"
                     if not dt_utc:
-                        error_msg += "خطا: فرمت تاریخ یا ساعت صحیح نیست.\n"
+                        error_msg += "خطا: فرمت تاریخ یا ساعت صحیح نیست (مثلاً ساعت ۲۵:۰۰ وارد شده).\n"
                     if not coords:
-                        error_msg += f"خطا: نتوانستیم مختصات شهر '{city}' را پیدا کنیم.\n"
+                        error_msg += f"خطا: نتوانستیم مختصات شهر '{city}' را پیدا کنیم. آیا نام شهر را درست وارد کرده‌اید؟\n"
                     await utils.send_telegram_message(chat_id, error_msg, "Markdown")
+                    CONVERSATION_STATE.pop(chat_id) # وضعیت را پاک می کنیم
                     return
             
+            # در صورتی که regex مطابقت نداشته باشد
             await utils.send_telegram_message(chat_id, "⚠️ **فرمت ورودی نادرست.** لطفاً مثال ارائه شده را دنبال کنید.", "Markdown")
             return
             
@@ -216,6 +256,7 @@ async def handle_text_message(chat_id: int, incoming_text: str):
         # --- وضعیت انتظار برای اطلاعات سجیل (SIGIL) ---
         elif state_data['state'] == 'EXPECTING_SIGIL_INFO':
             # فراخوانی ماژول مدیریت جریان کار سجیل
+            # اگر main_sajil وجود ندارد، این خط منجر به خطا می شود.
             await main_sajil.run_sajil_workflow(chat_id, incoming_text)
             
             # در صورت موفقیت/شکست، CONVERSATION_STATE در داخل run_sajil_workflow حذف می‌شود
@@ -241,6 +282,7 @@ async def telegram_webhook(update: Update):
     if update.message:
         chat_id = update.message['chat']['id']
         incoming_text = update.message.get('text', '')
+        # این تابع async است، لذا باید با await فراخوانی شود.
         await handle_text_message(chat_id, incoming_text)
         
     elif update.callback_query:
@@ -248,6 +290,7 @@ async def telegram_webhook(update: Update):
         message_id = update.callback_query['message']['message_id']
         callback_data = update.callback_query['data']
         
+        # این تابع async است، لذا باید با await فراخوانی شود.
         await handle_callback_query(chat_id, callback_data, message_id)
 
     return {"ok": True}
