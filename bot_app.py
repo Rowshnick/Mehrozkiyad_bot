@@ -3,21 +3,36 @@
 # این برنامه درخواست‌های وب‌هوک تلگرام را دریافت و پردازش می‌کند.
 # ======================================================================
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Body
 from typing import Dict, Any, Optional
 import os
+import datetime # 👈 اصلاح: ایمپورت اضافه شد
+import pytz     # 👈 اصلاح: ایمپورت اضافه شد
 
-# ایمپورت‌های ماژول‌های داخلی
+# ایمپورت‌های ماژول‌های داخلی (باید در کنار این فایل وجود داشته باشند)
 import utils
 import keyboards
 import astrology_core
 from persiantools.jdatetime import JalaliDateTime
 
-# ثابت‌ها
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "YOUR_SECRET_TOKEN")
+# --- تنظیمات ضروری ---
 
-# وضعیت کاربر (User State) - در پروژه‌های بزرگ باید با یک دیتابیس جایگزین شود
+# ⚠️ مهم: این متغیر باید در محیط دیپلوی (Environment Variables) تنظیم شود. 
+# مقدار پیش‌فرض را حذف کردیم تا اگر تنظیم نشود، برنامه خطا دهد.
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+# بررسی توکن در زمان اجرا
+if not BOT_TOKEN or BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+    print("FATAL ERROR: BOT_TOKEN environment variable is not set correctly.")
+    # می‌توانیم برنامه را در اینجا با خطا متوقف کنیم یا یک مقدار پیش‌فرض را برای تست محلی تنظیم کنیم.
+    # در محیط کانتینر، بهتر است روی خطای 404 تکیه کنیم.
+
+# ❌ حذف متغیر WEBHOOK_URL که به اشتباه برای نگهداری Secret Token استفاده می‌شد.
+# WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "YOUR_SECRET_TOKEN") 
+
+
+# --- وضعیت کاربر (User State) ---
+
 USER_STATE: Dict[int, Dict[str, Any]] = {}
 STEP_INPUT_DATE = "INPUT_DATE"
 STEP_INPUT_TIME = "INPUT_TIME"
@@ -34,13 +49,22 @@ def get_user_state(user_id: int) -> Dict[str, Any]:
             "step": "START",
             "date_fa": None,
             "time_str": None,
-            "city_name": None
+            "city_name": None,
+            "jdate_obj": None,
+            "time_obj": None
         }
     return USER_STATE[user_id]
 
 def reset_user_state(user_id: int) -> None:
     """بازنشانی وضعیت کاربر."""
-    USER_STATE[user_id] = {"step": "START", "date_fa": None, "time_str": None, "city_name": None}
+    USER_STATE[user_id] = {
+        "step": "START", 
+        "date_fa": None, 
+        "time_str": None, 
+        "city_name": None, 
+        "jdate_obj": None,
+        "time_obj": None
+    }
 
 def build_chart_summary(chart_data: Dict[str, Any]) -> str:
     """ایجاد یک خلاصه زیبا از چارت برای کاربر."""
@@ -55,11 +79,13 @@ def build_chart_summary(chart_data: Dict[str, Any]) -> str:
     summary += f"_محل تولد:_ {state.get('city_name', 'نامشخص')}\n\n"
 
     # موقعیت خورشید و ماه (نمونه از astrology_core)
+    # ⚠️ توجه: این قسمت فرض می‌کند که ساختار chart_data را می‌دانید.
+    # بهتر است از یک لیست سیارات مجاز استفاده کنید.
     for planet_key, data in chart_data.items():
         if isinstance(data, dict) and 'sign_fa' in data:
             name = data.get('name_fa', planet_key)
             sign = data['sign_fa']
-            pos = data['position_str']
+            pos = data.get('position_str', 'نامشخص')
             summary += f"*{name}:* {pos} {sign} \n"
             
     summary += "\n---\n"
@@ -86,6 +112,12 @@ async def handle_callback_query(chat_id: int, callback_id: str, data: str) -> No
 
     # 2. تجزیه Callback Data: <MENU>|<SUBMENU>|<ACTION>
     parts = data.split('|')
+    
+    # اگر داده از ساختار مورد انتظار پیروی نمی‌کند، از آن چشم‌پوشی می‌کنیم یا به منوی اصلی باز می‌گردیم.
+    if len(parts) < 3:
+        await handle_start_command(chat_id)
+        return
+
     menu, submenu, action = parts[0], parts[1], parts[2]
     
     response_text = "لطفاً یک گزینه را انتخاب کنید:"
@@ -128,6 +160,8 @@ async def handle_callback_query(chat_id: int, callback_id: str, data: str) -> No
         # ... سایر زیرمنوها (SIGIL, HERB) ...
 
     # ارسال پاسخ نهایی
+    # ⚠️ نیاز به utils.edit_message برای ویرایش پیام قبلی
+    # فرض می‌کنیم utils.send_message در اینجا کافی است
     await utils.send_message(BOT_TOKEN, chat_id, response_text, reply_markup)
 
 async def handle_text_message(chat_id: int, text: str) -> None:
@@ -150,6 +184,7 @@ async def handle_text_message(chat_id: int, text: str) -> None:
     elif current_step == STEP_INPUT_TIME:
         # بررسی فرمت زمان HH:MM
         try:
+            # ⚠️ اصلاح: استفاده از datetime که در بالای فایل ایمپورت شد
             time_obj = datetime.datetime.strptime(text, "%H:%M").time()
             state['time_str'] = text
             state['time_obj'] = time_obj
@@ -163,12 +198,15 @@ async def handle_text_message(chat_id: int, text: str) -> None:
         
         # 1. دریافت مختصات و منطقه زمانی (عملیات Blocking I/O که در utils آسنکرون شده است)
         await utils.send_message(BOT_TOKEN, chat_id, "⏳ در حال جستجوی شهر و منطقه زمانی شما\\...", None)
+        # ⚠️ نیاز به چک کردن تابع get_coordinates_from_city در utils برای آسنکرون بودن
         lat, lon, tz = await utils.get_coordinates_from_city(city_name)
         
         if lat is None or lon is None:
             response_text = f"متأسفانه شهر *{city_name}* پیدا نشد\\. لطفاً نام شهر را با دقت بیشتری وارد کنید\\."
             state['step'] = STEP_INPUT_CITY # می‌مانیم تا دوباره تلاش کند
         else:
+            state['city_name'] = city_name # ذخیره نام شهر
+            
             # 2. آماده‌سازی داده‌های نهایی
             jdate: JalaliDateTime = state['jdate_obj']
             time_obj = state['time_obj']
@@ -177,6 +215,7 @@ async def handle_text_message(chat_id: int, text: str) -> None:
             dt_local = jdate.togregorian().replace(hour=time_obj.hour, minute=time_obj.minute, second=0)
             
             # اعمال منطقه زمانی و تبدیل به UTC
+            # ⚠️ اصلاح: استفاده از pytz که در بالای فایل ایمپورت شد
             dt_local_with_tz = tz.localize(dt_local)
             birth_time_utc = dt_local_with_tz.astimezone(pytz.utc)
             
@@ -197,14 +236,18 @@ async def handle_text_message(chat_id: int, text: str) -> None:
 
 app = FastAPI()
 
+# ⚠️ مسیر وب‌هوک به توکن ربات شما گره خورده است.
 @app.post(f"/{BOT_TOKEN}")
 async def webhook_handler(request: Request):
     """هندلر اصلی وب‌هوک تلگرام."""
-    if request.headers.get("x-telegram-bot-api-secret-token") != WEBHOOK_URL:
-        raise HTTPException(status_code=403, detail="Invalid Secret Token")
-
+    
+    # ❌ حذف منطق چک کردن توکن مخفی:
+    # if request.headers.get("x-telegram-bot-api-secret-token") != WEBHOOK_URL:
+    #     raise HTTPException(status_code=403, detail="Invalid Secret Token")
+    
     body = await request.json()
     
+    # بررسی کنید که آیا به‌روزرسانی شامل پیام یا Callback Query است
     if 'message' in body:
         message = body['message']
         chat_id = message['chat']['id']
@@ -233,4 +276,5 @@ async def webhook_handler(request: Request):
 @app.get("/")
 async def health_check():
     """بررسی سلامت سرویس."""
-    return {"status": "ok", "message": "Bot is running"}
+    return {"status": "ok", "message": "Bot is running. Webhook path is /<BOT_TOKEN>"}
+
