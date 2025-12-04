@@ -15,7 +15,7 @@ from persiantools.jdatetime import JalaliDateTime
 
 # ثابت‌ها
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "YOUR_SECRET_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "YOUR_SECRET_TOKEN")
 
 # وضعیت کاربر (User State) - در پروژه‌های بزرگ باید با یک دیتابیس جایگزین شود
 USER_STATE: Dict[int, Dict[str, Any]] = {}
