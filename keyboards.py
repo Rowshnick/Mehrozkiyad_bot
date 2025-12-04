@@ -3,7 +3,7 @@
 # این توابع، ساختار دیکشنری مورد نیاز برای پارامتر 'reply_markup' در API تلگرام را تولید می‌کنند.
 # ======================================================================
 
-from typing import Optional, Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 # **قالب ثابت برای Callback Data:**
 # <منو_اصلی>|<زیرمنو>|<پارامتر_عملیاتی>
@@ -51,7 +51,6 @@ def astrology_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
     """منوی آسترولوژی: تولید چارت و پیش‌گویی."""
     keyboard = [
         [create_button("تولید چارت تولد (زایچه) 📝", callback_data='SERVICES|ASTRO|CHART_INPUT')], # نیاز به دریافت ورودی از کاربر
-        [create_button("پیش‌گویی روزانه ستاره‌شناسی 🗓️", callback_data='SERVICES|ASTRO|DAILY')],
         [create_button("بازگشت به خدمات ↩️", callback_data='MAIN|SERVICES|0')],
     ]
     return create_keyboard(keyboard)
@@ -62,7 +61,6 @@ def gem_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
     keyboard = [
         [create_button("سنگ مناسب شخصی 👤", callback_data='SERVICES|GEM|PERSONAL_INPUT')], # نیاز به اطلاعات تولد
         [create_button("خواص هر سنگ 🔍", callback_data='SERVICES|GEM|INFO')],
-        [create_button("سنگ هر ماه تولد 📅", callback_data='SERVICES|GEM|MONTH')],
         [create_button("بازگشت به خدمات ↩️", callback_data='MAIN|SERVICES|0')],
     ]
     return create_keyboard(keyboard)
@@ -71,10 +69,8 @@ def gem_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
 def shop_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
     """منوی فروشگاه: سفارش خدمات."""
     keyboard = [
-        # هر سفارش در یک خط برای وضوح بیشتر
         [create_button("سفارش چارت تولد (کامل) 📄", callback_data='SHOP|ORDER|CHART')],
         [create_button("سفارش سنگ شخصی 💍", callback_data='SHOP|ORDER|GEM')],
-        [create_button("سفارش نماد (سجیل) شخصی 🖼️", callback_data='SHOP|ORDER|SIGIL')],
         [create_button("پکیج کامل خدمات 🎁", callback_data='SHOP|ORDER|PACKAGE')],
         [create_button("بازگشت به منوی اصلی 🔙", callback_data='MAIN|WELCOME|0')],
     ]
@@ -84,15 +80,18 @@ def shop_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
 def socials_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
     """منوی شبکه‌های اجتماعی و لینک‌های خارجی."""
     keyboard = [
-        # دکمه‌های URL باید در یک لیست (سطر) قرار گیرند
         [
             create_button("وبسایت 🖥️", url="https://your-website.com"), 
             create_button("اینستاگرام 📸", url="https://instagram.com/your-page")
         ],
-        [
-            create_button("تلگرام عمومی 📢", url="https://t.me/your-channel"),
-            create_button("یوتیوب ▶️", url="https://youtube.com/your-channel")
-        ],
+        [create_button("بازگشت به منوی اصلی 🔙", callback_data='MAIN|WELCOME|0')],
+    ]
+    return create_keyboard(keyboard)
+
+# --- ۷. منوی بازگشت ساده برای حالت‌های ورودی ---
+def back_to_main_menu_keyboard() -> Dict[str, List[List[Dict[str, Any]]]]:
+    """یک کیبورد ساده با دکمه بازگشت به منوی اصلی."""
+    keyboard = [
         [create_button("بازگشت به منوی اصلی 🔙", callback_data='MAIN|WELCOME|0')],
     ]
     return create_keyboard(keyboard)
