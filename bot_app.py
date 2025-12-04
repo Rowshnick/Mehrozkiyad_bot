@@ -1,296 +1,236 @@
+# ======================================================================
+# ماژول اصلی ربات تلگرام با استفاده از FastAPI
+# این برنامه درخواست‌های وب‌هوک تلگرام را دریافت و پردازش می‌کند.
+# ======================================================================
+
+from fastapi import FastAPI, Request, HTTPException
+from typing import Dict, Any, Optional
 import os
-import datetime
-import re
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from skyfield.api import load
-from skyfield.framelib import ecliptic_frame
-import json # اضافه شده برای استفاده احتمالی
 
-# ======================================================================
-# رفع خطای ModuleNotFoundError: ایمپورت‌های مطلق
-# ======================================================================
+# ایمپورت‌های ماژول‌های داخلی
+import utils
+import keyboards
+import astrology_core
+from persiantools.jdatetime import JalaliDateTime
 
-# وارد کردن ماژول‌های داخلی
-try:
-    import utils
-    import keyboards
-    import astrology_core
-    import data_lookup
-    # ایمپورت کردن ماژول‌های سجیل (اگر این فایل‌ها موجود نیستند، لطفا حذف یا ایجاد شوند)
-    import main_sajil 
-    import sajil_part_one
-    import sajil_part_two
-except ImportError as e:
-    # این خطا نشان می‌دهد که یکی از فایل‌های کمکی در فرآیند دیپلوی گنجانده نشده است.
-    print(f"Error importing local modules: {e}. Ensure all .py files are in the deployment package.")
-    # اگر utils.py یا keyboards.py گم شده باشند، اینجا خطا متوقف می شود.
-    raise 
+# ثابت‌ها
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "YOUR_SECRET_TOKEN")
 
-# ======================================================================
-# 1. تنظیمات اولیه
-# ======================================================================
+# وضعیت کاربر (User State) - در پروژه‌های بزرگ باید با یک دیتابیس جایگزین شود
+USER_STATE: Dict[int, Dict[str, Any]] = {}
+STEP_INPUT_DATE = "INPUT_DATE"
+STEP_INPUT_TIME = "INPUT_TIME"
+STEP_INPUT_CITY = "INPUT_CITY"
+STEP_READY_TO_CALCULATE = "READY"
+
+
+# --- توابع کمکی ---
+
+def get_user_state(user_id: int) -> Dict[str, Any]:
+    """دریافت وضعیت جاری کاربر یا مقداردهی اولیه آن."""
+    if user_id not in USER_STATE:
+        USER_STATE[user_id] = {
+            "step": "START",
+            "date_fa": None,
+            "time_str": None,
+            "city_name": None
+        }
+    return USER_STATE[user_id]
+
+def reset_user_state(user_id: int) -> None:
+    """بازنشانی وضعیت کاربر."""
+    USER_STATE[user_id] = {"step": "START", "date_fa": None, "time_str": None, "city_name": None}
+
+def build_chart_summary(chart_data: Dict[str, Any]) -> str:
+    """ایجاد یک خلاصه زیبا از چارت برای کاربر."""
+    if "error" in chart_data:
+        return f"❌ خطای محاسباتی: {chart_data['error']}\nلطفاً دوباره امتحان کنید."
+        
+    summary = "✨ **خلاصه چارت نجومی شما** ✨\n\n"
+    
+    # اطلاعات ورودی
+    state = USER_STATE.get(chart_data.get('user_id', 0), {})
+    summary += f"_زمان تولد:_ {state.get('date_fa', 'نامشخص')} {state.get('time_str', 'نامشخص')}\n"
+    summary += f"_محل تولد:_ {state.get('city_name', 'نامشخص')}\n\n"
+
+    # موقعیت خورشید و ماه (نمونه از astrology_core)
+    for planet_key, data in chart_data.items():
+        if isinstance(data, dict) and 'sign_fa' in data:
+            name = data.get('name_fa', planet_key)
+            sign = data['sign_fa']
+            pos = data['position_str']
+            summary += f"*{name}:* {pos} {sign} \n"
+            
+    summary += "\n---\n"
+    summary += "⚠️ *توجه:* این یک چارت ساده (فقط خورشید و ماه) است. برای چارت کامل و تحلیل دقیق به بخش فروشگاه مراجعه کنید."
+    
+    return summary
+
+
+# --- توابع هندلر ---
+
+async def handle_start_command(chat_id: int) -> None:
+    """هندلر دستور /start یا MAIN|WELCOME."""
+    reset_user_state(chat_id)
+    welcome_text = (
+        "سلام! به ربات تخصصی آسترولوژی، سنگ‌شناسی و نمادشناسی خوش آمدید. "
+        "لطفاً از منوی زیر، سرویس مورد نظر خود را انتخاب کنید\\."
+    )
+    await utils.send_message(BOT_TOKEN, chat_id, welcome_text, keyboards.main_menu_keyboard())
+
+async def handle_callback_query(chat_id: int, callback_id: str, data: str) -> None:
+    """هندلر کلیک‌های کیبورد اینلاین."""
+    # 1. پاسخ به Callback Query برای حذف ساعت چرخان
+    await utils.answer_callback_query(BOT_TOKEN, callback_id)
+
+    # 2. تجزیه Callback Data: <MENU>|<SUBMENU>|<ACTION>
+    parts = data.split('|')
+    menu, submenu, action = parts[0], parts[1], parts[2]
+    
+    response_text = "لطفاً یک گزینه را انتخاب کنید:"
+    reply_markup = None
+    state = get_user_state(chat_id)
+
+    # مسیریابی منوی اصلی
+    if menu == 'MAIN':
+        if submenu == 'WELCOME':
+            await handle_start_command(chat_id)
+            return
+        elif submenu == 'SERVICES':
+            response_text = "بخش خدمات: چه نوع تحلیل یا ابزاری نیاز دارید؟"
+            reply_markup = keyboards.services_menu_keyboard()
+        elif submenu == 'SHOP':
+            response_text = "بخش فروشگاه: برای سفارش چارت‌های کامل، تحلیل‌های شخصی و محصولات."
+            reply_markup = keyboards.shop_menu_keyboard()
+        elif submenu == 'SOCIALS':
+            response_text = "شبکه‌های اجتماعی و لینک‌های ارتباطی ما:"
+            reply_markup = keyboards.socials_menu_keyboard()
+        elif submenu == 'ABOUT':
+            response_text = "درباره ما: ما یک تیم تخصصی آسترولوژی و علوم باطنی هستیم. هدف ما ارائه دقیق‌ترین و شخصی‌سازی‌شده‌ترین تحلیل‌هاست."
+            reply_markup = keyboards.back_to_main_menu_keyboard()
+
+    # مسیریابی منوی خدمات
+    elif menu == 'SERVICES':
+        if submenu == 'ASTRO':
+            if action == '0':
+                response_text = "خدمات آسترولوژی: تولید چارت تولد یا ابزارهای دیگر."
+                reply_markup = keyboards.astrology_menu_keyboard()
+            elif action == 'CHART_INPUT':
+                response_text = "لطفاً تاریخ تولد خود را به فرمت شمسی (مثلاً *1370/01/01*) ارسال کنید\\."
+                reply_markup = keyboards.back_to_main_menu_keyboard()
+                state['step'] = STEP_INPUT_DATE
+            
+        elif submenu == 'GEM':
+            response_text = "خدمات سنگ‌شناسی:"
+            reply_markup = keyboards.gem_menu_keyboard()
+            
+        # ... سایر زیرمنوها (SIGIL, HERB) ...
+
+    # ارسال پاسخ نهایی
+    await utils.send_message(BOT_TOKEN, chat_id, response_text, reply_markup)
+
+async def handle_text_message(chat_id: int, text: str) -> None:
+    """هندلر پیام‌های متنی از کاربر."""
+    state = get_user_state(chat_id)
+    current_step = state['step']
+    response_text = "ورودی نامعتبر. لطفاً مطابق درخواست قبلی، اطلاعات را وارد کنید."
+    reply_markup = keyboards.back_to_main_menu_keyboard()
+
+    if current_step == STEP_INPUT_DATE:
+        jdate: Optional[JalaliDateTime] = utils.parse_persian_date(text)
+        if jdate:
+            state['date_fa'] = text
+            state['jdate_obj'] = jdate
+            state['step'] = STEP_INPUT_TIME
+            response_text = "تاریخ تولد شما ثبت شد\\. حالا لطفاً ساعت تولد را به وقت محلی به فرمت *HH:MM* (مثلاً *08:30*) ارسال کنید\\."
+        else:
+            response_text = "فرمت تاریخ اشتباه است\\. لطفاً از فرمت *1370/01/01* استفاده کنید\\."
+
+    elif current_step == STEP_INPUT_TIME:
+        # بررسی فرمت زمان HH:MM
+        try:
+            time_obj = datetime.datetime.strptime(text, "%H:%M").time()
+            state['time_str'] = text
+            state['time_obj'] = time_obj
+            state['step'] = STEP_INPUT_CITY
+            response_text = "ساعت تولد شما ثبت شد\\. در نهایت، لطفاً نام شهر محل تولد (مثلاً *تهران*) را ارسال کنید\\."
+        except ValueError:
+            response_text = "فرمت ساعت اشتباه است\\. لطفاً از فرمت *HH:MM* (مثلاً *08:30*) استفاده کنید\\."
+
+    elif current_step == STEP_INPUT_CITY:
+        city_name = text.strip()
+        
+        # 1. دریافت مختصات و منطقه زمانی (عملیات Blocking I/O که در utils آسنکرون شده است)
+        await utils.send_message(BOT_TOKEN, chat_id, "⏳ در حال جستجوی شهر و منطقه زمانی شما\\...", None)
+        lat, lon, tz = await utils.get_coordinates_from_city(city_name)
+        
+        if lat is None or lon is None:
+            response_text = f"متأسفانه شهر *{city_name}* پیدا نشد\\. لطفاً نام شهر را با دقت بیشتری وارد کنید\\."
+            state['step'] = STEP_INPUT_CITY # می‌مانیم تا دوباره تلاش کند
+        else:
+            # 2. آماده‌سازی داده‌های نهایی
+            jdate: JalaliDateTime = state['jdate_obj']
+            time_obj = state['time_obj']
+            
+            # ترکیب تاریخ و زمان شمسی
+            dt_local = jdate.togregorian().replace(hour=time_obj.hour, minute=time_obj.minute, second=0)
+            
+            # اعمال منطقه زمانی و تبدیل به UTC
+            dt_local_with_tz = tz.localize(dt_local)
+            birth_time_utc = dt_local_with_tz.astimezone(pytz.utc)
+            
+            # 3. محاسبه چارت (عملیات CPU-Bound)
+            chart_data = astrology_core.calculate_natal_chart(birth_time_utc, lat, lon)
+            chart_data['user_id'] = chat_id # برای نمایش خلاصه
+
+            # 4. نمایش نتیجه و بازنشانی وضعیت
+            response_text = build_chart_summary(chart_data)
+            reply_markup = keyboards.main_menu_keyboard()
+            reset_user_state(chat_id) # عملیات کامل شد
+
+    # ارسال پاسخ نهایی
+    await utils.send_message(BOT_TOKEN, chat_id, response_text, reply_markup)
+
+
+# --- پیکربندی FastAPI ---
 
 app = FastAPI()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+@app.post(f"/{BOT_TOKEN}")
+async def webhook_handler(request: Request):
+    """هندلر اصلی وب‌هوک تلگرام."""
+    if request.headers.get("x-telegram-bot-api-secret-token") != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid Secret Token")
 
-# بررسی وجود توکن
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN environment variable not set.")
-
-# State نگهداری وضعیت مکالمه موقت (باید با یک دیتابیس واقعی جایگزین شود)
-# {chat_id: {'state': 'EXPECTING_BIRTH_INFO', 'data': {}}}
-CONVERSATION_STATE = {}
-
-# ======================================================================
-# 2. مدل‌های داده‌ای
-# ======================================================================
-
-class Update(BaseModel):
-    update_id: int
-    message: dict = None
-    callback_query: dict = None
-
-# ======================================================================
-# 3. توابع اصلی هندلینگ (Routing)
-# ======================================================================
-
-async def handle_start_command(chat_id: int):
-    """هندل کردن دستور /start یا /شروع"""
-    welcome_text = (
-        "✨ **به ربات تحلیل آسترولوژیک و نمادشناسی خوش آمدید!** ✨\n"
-        "این ربات یک ابزار دقیق برای ارائه خدمات شخصی‌سازی‌شده بر پایه نجوم و نمادشناسی باستانی است.\n"
-        "لطفاً از طریق کلیدهای زیر، سرویس مورد نظر خود را انتخاب کنید."
-    )
-    # فراخوانی توابع از ماژول‌های ایمپورت شده
-    await utils.send_telegram_message(chat_id, welcome_text, "Markdown", keyboards.main_menu_keyboard())
-
-
-async def handle_callback_query(chat_id: int, callback_data: str, message_id: int):
-    """هندل کردن Callback Queryهای کلیدهای اینلاین"""
+    body = await request.json()
     
-    # حذف وضعیت قبلی مکالمه در صورت تغییر مسیر
-    CONVERSATION_STATE.pop(chat_id, None) 
-    
-    parts = callback_data.split('|')
-    
-    if len(parts) < 3:
-        # ویرایش پیام قبلی برای رفع خطا
-        await utils.send_telegram_message(chat_id, "❌ خطای داده. لطفاً از منوی اصلی استفاده کنید.", "Markdown", keyboards.main_menu_keyboard())
-        return
-
-    menu, submenu, action = parts[0], parts[1], parts[2]
-    
-    # 1. مسیردهی منوی اصلی و خدمات (بدون تغییر)
-    if menu == 'MAIN':
-        if submenu == 'SERVICES':
-            await utils.send_telegram_message(chat_id, "بخش خدمات:", "Markdown", keyboards.services_menu_keyboard())
-        elif submenu == 'SHOP':
-            await utils.send_telegram_message(chat_id, "بخش فروشگاه و سفارشات:", "Markdown", keyboards.shop_menu_keyboard())
-        elif submenu == 'SOCIALS':
-            info_text = "🌐 **شبکه‌های اجتماعی و سایت**\nبرای مشاهده لینک‌ها، از کیبورد زیر استفاده کنید."
-            await utils.send_telegram_message(chat_id, info_text, "Markdown", keyboards.socials_menu_keyboard())
-        elif submenu == 'ABOUT':
-            info_text = "🧑‍💻 **درباره ما**\n\nاین سیستم یک پروژه آکادمیک برای تحلیل نمادها است."
-            await utils.send_telegram_message(chat_id, info_text, "Markdown", keyboards.main_menu_keyboard())
-        elif submenu == 'WELCOME':
+    if 'message' in body:
+        message = body['message']
+        chat_id = message['chat']['id']
+        text = message.get('text', '')
+        
+        # هندل دستور /start
+        if text.startswith('/start'):
             await handle_start_command(chat_id)
+        # هندل پیام متنی عادی
+        elif text and get_user_state(chat_id)['step'] != 'START':
+            await handle_text_message(chat_id, text)
+        # اگر کاربر در حالت START چیزی نوشت (به جز /start)
+        else:
+             await handle_start_command(chat_id)
 
-    # 2. مسیردهی خدمات
-    elif menu == 'SERVICES':
-        # ... بخش ASTRO و GEM بدون تغییر
-        if submenu == 'ASTRO':
-            if action == '0':
-                await utils.send_telegram_message(chat_id, "بخش آسترولوژی:", "Markdown", keyboards.astrology_menu_keyboard())
-            elif action == 'CHART_INPUT':
-                CONVERSATION_STATE[chat_id] = {'state': 'EXPECTING_BIRTH_INFO', 'step': 1, 'data': {}}
-                
-                input_text = (
-                    "📝 **تولید چارت تولد (زایچه)**\n"
-                    "لطفاً اطلاعات زیر را در یک خط و با فرمت مشخص وارد کنید:\n\n"
-                    "**فرمت:** `نام، جنسیت، تاریخ تولد (YYYY/MM/DD)، ساعت تولد (HH:MM)، محل تولد (شهر)`\n"
-                    "**مثال:** `علی، مذکر، ۱۳۷۰/۰۵/۲۲، ۱۷:۳۰، تهران`\n"
-                )
-                await utils.send_telegram_message(chat_id, input_text, "Markdown")
+    elif 'callback_query' in body:
+        query = body['callback_query']
+        chat_id = query['message']['chat']['id']
+        callback_id = query['id']
+        data = query['data']
         
-        elif submenu == 'GEM':
-            if action == '0':
-                await utils.send_telegram_message(chat_id, "بخش سنگ‌شناسی:", "Markdown", keyboards.gem_menu_keyboard())
-            elif action == 'PERSONAL_INPUT':
-                CONVERSATION_STATE[chat_id] = {'state': 'EXPECTING_GEM_INFO', 'step': 1, 'data': {}}
-                input_text = (
-                    "💎 **انتخاب سنگ مناسب شخصی**\n"
-                    "لطفاً اطلاعات تولد و همچنین **نیت یا هدف** خود را وارد کنید (مثل: شغل، عشق، ثروت).\n\n"
-                    "**فرمت:** `تاریخ (YYYY/MM/DD)، ساعت (HH:MM)، شهر، نیت`\n"
-                    "**مثال:** `۱۳۷۰/۰۵/۲۲، ۱۷:۳۰، تهران، افزایش ثروت`"
-                )
-                await utils.send_telegram_message(chat_id, input_text, "Markdown")
-                
-        # --- بخش SIGIL (نمادشناسی) ---
-        elif submenu == 'SIGIL':
-            if action == '0':
-                await utils.send_telegram_message(chat_id, "بخش نمادشناسی (سجیل):", "Markdown", keyboards.services_menu_keyboard())
-            elif action == 'PERSONAL_INPUT':
-                CONVERSATION_STATE[chat_id] = {'state': 'EXPECTING_SIGIL_INFO', 'step': 1, 'data': {}}
-                input_text = (
-                    "✨ **تولید نماد (سجیل) شخصی** ✨\n"
-                    "برای تحلیل سجیل، لطفاً **سری اعداد و کلمات کلیدی** مرتبط با هدف خود را وارد کنید.\n\n"
-                    "**فرمت:** `عدد ۱، عدد ۲، عدد ۳، ...`\n"
-                    "**مثال:** `۱۰، ۵۵، ۱۲، ۳.۴، ۲۰`\n"
-                    "*بعد از اتمام کار، ربات بر اساس این اعداد، تحلیل و نماد پیشنهادی را ارائه خواهد کرد.*"
-                )
-                await utils.send_telegram_message(chat_id, input_text, "Markdown")
+        await handle_callback_query(chat_id, callback_id, data)
         
-        # ... پیاده‌سازی زیرمنوی HERB
-
-    # 4. مسیردهی فروشگاه
-    elif menu == 'SHOP':
-        await utils.send_telegram_message(chat_id, "بخش فروشگاه در حال تکمیل است.", "Markdown", keyboards.shop_menu_keyboard())
-
-
-# ======================================================================
-# 4. هندلینگ پیام‌های متنی (Message Handler)
-# ======================================================================
-
-async def handle_text_message(chat_id: int, incoming_text: str):
-    
-    # 1. اگر کاربر در وضعیت خاصی است (مانند انتظار برای اطلاعات تولد یا سجیل)
-    if chat_id in CONVERSATION_STATE:
-        state_data = CONVERSATION_STATE[chat_id]
-        
-        # --- وضعیت انتظار برای اطلاعات تولد (ASTRO) ---
-        if state_data['state'] == 'EXPECTING_BIRTH_INFO':
-            # regex برای تطابق دقیق با فرمت: نام، جنسیت، تاریخ، ساعت، شهر
-            match = re.match(r'(.+?)،\s*(.+?)،\s*(\d{4}[/-]\d{1,2}[/-]\d{1,2})،\s*(\d{1,2}:\d{1,2})،\s*(.+)', incoming_text)
-            
-            if match:
-                name, gender, shamsi_date_str, time_str, city = match.groups()
-                # ترکیب تاریخ و زمان برای تابع تبدیل
-                shamsi_dt = f"{shamsi_date_str} {time_str}:00"
-                
-                print(f"DEBUG: Processing input for {name}, City: {city}") # چاپ برای دیباگ
-
-                try:
-                    # 1. تبدیل تاریخ و زمان
-                    dt_utc = utils.parse_shamsi_to_utc_datetime(shamsi_dt)
-                    
-                    # 2. دریافت مختصات جغرافیایی (Async call)
-                    coords = await utils.get_coordinates_from_city(city)
-                
-                except Exception as e:
-                    # اگر خطایی در توابع utils رخ داد، اینجا گرفته می‌شود.
-                    print(f"CRITICAL UTILS ERROR: {e}")
-                    await utils.send_telegram_message(chat_id, f"❌ خطای داخلی هنگام تبدیل زمان یا مکان: {e}", "Markdown")
-                    CONVERSATION_STATE.pop(chat_id)
-                    return # جلوگیری از ادامه کار
-
-                # بررسی اعتبار داده‌ها
-                if dt_utc and coords:
-                    lat, lon = coords
-                    
-                    try:
-                        # 3. محاسبه چارت
-                        natal_data = astrology_core.calculate_natal_chart(dt_utc, lat, lon)
-                        
-                        # 4. تولید خروجی
-                        output = f"✨ **چارت تولد شخصی‌سازی شده برای {name} ({gender})**\n\n"
-                        output += f"📅 **تاریخ شمسی:** {utils.convert_to_shamsi_date(dt_utc)}\n"
-                        output += f"📍 **محل تولد:** {city} (عرض: {lat:.2f}، طول: {lon:.2f})\n\n"
-                        
-                        for planet, data in natal_data.items():
-                             # اگر موقعیت محاسبه شده باشد (خاموش کردن Placeholderها)
-                             if planet in ['Sun', 'Moon']:
-                                # اگر داده['longitude'] عدد باشد:
-                                try:
-                                    long_str = f"{data['longitude']:.2f}°"
-                                except TypeError:
-                                     long_str = data['longitude'] # برای Placeholderها
-
-                                output += f"☀️ **{planet} در:** {long_str} {data['sign_fa']}\n"
-                             elif planet == 'Ascendant':
-                                output += f"⬆️ **طالع (صعودی):** {data['sign_fa']}\n"
-                        
-                        output += "\n*توجه: محاسبه Houseها و Ascendant نیاز به کتابخانه نجومی تخصصی‌تر دارد.*"
-                        
-                        await utils.send_telegram_message(chat_id, output, "Markdown", keyboards.astrology_menu_keyboard())
-                        CONVERSATION_STATE.pop(chat_id)
-                        return
-                    
-                    except Exception as e:
-                        # خطاهای محاسباتی در astrology_core
-                        print(f"CRITICAL ASTROLOGY ERROR: {e}")
-                        await utils.send_telegram_message(chat_id, f"❌ خطای حیاتی در محاسبه چارت نجومی: {e}", "Markdown")
-                        CONVERSATION_STATE.pop(chat_id)
-                        return
-                        
-                else:
-                    # خطای عدم اعتبار (تاریخ/ساعت نامعتبر یا شهر پیدا نشد)
-                    error_msg = "❌ **خطا در پردازش اطلاعات!**\n"
-                    if not dt_utc:
-                        error_msg += "خطا: فرمت تاریخ یا ساعت صحیح نیست (مثلاً ساعت ۲۵:۰۰ وارد شده).\n"
-                    if not coords:
-                        error_msg += f"خطا: نتوانستیم مختصات شهر '{city}' را پیدا کنیم. آیا نام شهر را درست وارد کرده‌اید؟\n"
-                    await utils.send_telegram_message(chat_id, error_msg, "Markdown")
-                    CONVERSATION_STATE.pop(chat_id) # وضعیت را پاک می کنیم
-                    return
-            
-            # در صورتی که regex مطابقت نداشته باشد
-            await utils.send_telegram_message(chat_id, "⚠️ **فرمت ورودی نادرست.** لطفاً مثال ارائه شده را دنبال کنید.", "Markdown")
-            return
-            
-        # --- وضعیت انتظار برای اطلاعات سنگ‌شناسی (GEM) ---
-        elif state_data['state'] == 'EXPECTING_GEM_INFO':
-            match = re.match(r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})،\s*(\d{1,2}:\d{1,2})،\s*(.+?)،\s*(.+)', incoming_text)
-            
-            if match:
-                # shamsi_date_str, time_str, city, intention = match.groups()
-                # منطق سنگ‌شناسی از data_lookup.GEM_MAPPING استفاده خواهد کرد
-                await utils.send_telegram_message(chat_id, f"✅ اطلاعات سنگ شناسی دریافت شد. (نیاز به پیاده‌سازی کامل منطق تطبیق)", "Markdown", keyboards.gem_menu_keyboard())
-                CONVERSATION_STATE.pop(chat_id)
-                return
-            
-            await utils.send_telegram_message(chat_id, "⚠️ **فرمت ورودی نادرست برای سنگ‌شناسی.** لطفاً مثال ارائه شده را دنبال کنید.", "Markdown")
-            return
-            
-        # --- وضعیت انتظار برای اطلاعات سجیل (SIGIL) ---
-        elif state_data['state'] == 'EXPECTING_SIGIL_INFO':
-            # فراخوانی ماژول مدیریت جریان کار سجیل
-            # اگر main_sajil وجود ندارد، این خط منجر به خطا می شود.
-            await main_sajil.run_sajil_workflow(chat_id, incoming_text)
-            
-            # در صورت موفقیت/شکست، CONVERSATION_STATE در داخل run_sajil_workflow حذف می‌شود
-            CONVERSATION_STATE.pop(chat_id, None)
-            return
-            
-    # 2. هندل کردن دستورات اصلی
-    if incoming_text == '/start' or incoming_text == '/شروع':
-        CONVERSATION_STATE.pop(chat_id, None) 
-        await handle_start_command(chat_id)
-    elif incoming_text.startswith('/'):
-        await utils.send_telegram_message(chat_id, "دستور نامعتبر. لطفاً از منوی اصلی استفاده کنید.", "Markdown", keyboards.main_menu_keyboard())
-    else:
-        await utils.send_telegram_message(chat_id, "پیام شما دریافت شد. لطفاً از طریق منوی اصلی با ربات تعامل کنید.", "Markdown", keyboards.main_menu_keyboard())
-
-# ======================================================================
-# 5. Endpoint اصلی Webhook
-# ======================================================================
-
-@app.post(f"/{TELEGRAM_TOKEN}")
-async def telegram_webhook(update: Update):
-    
-    if update.message:
-        chat_id = update.message['chat']['id']
-        incoming_text = update.message.get('text', '')
-        # این تابع async است، لذا باید با await فراخوانی شود.
-        await handle_text_message(chat_id, incoming_text)
-        
-    elif update.callback_query:
-        chat_id = update.callback_query['message']['chat']['id']
-        message_id = update.callback_query['message']['message_id']
-        callback_data = update.callback_query['data']
-        
-        # این تابع async است، لذا باید با await فراخوانی شود.
-        await handle_callback_query(chat_id, callback_data, message_id)
-
     return {"ok": True}
+
+@app.get("/")
+async def health_check():
+    """بررسی سلامت سرویس."""
+    return {"status": "ok", "message": "Bot is running"}
