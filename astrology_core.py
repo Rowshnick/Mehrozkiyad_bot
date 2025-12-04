@@ -1,7 +1,6 @@
 # ======================================================================
 # ماژول اصلی محاسبات آسترولوژی
 # این ماژول از Skyfield برای محاسبات نجومی دقیق استفاده می‌کند.
-# وضعیت: PLACEHOLDER عملیاتی - فقط موقعیت‌های خورشید و ماه را محاسبه می‌کند.
 # ======================================================================
 
 import datetime
@@ -10,38 +9,60 @@ from skyfield.timelib import Time
 from typing import Dict, Any, Tuple
 
 # ثابت‌ها
-PLANETS = ['sun', 'moon'] # در آینده باید تکمیل شود: 'mercury', 'venus', 'mars', ...
+# تکمیل لیست سیارات اصلی برای چارت تولد (از خورشید تا پلوتو)
+PLANETS = ['sun', 'moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto'] 
 DEGREES_PER_SIGN = 30
 ZODIAC_SIGNS_FA = ["حمل", "ثور", "جوزا", "سرطان", "اسد", "سنبله", 
                     "میزان", "عقرب", "قوس", "جدی", "دلو", "حوت"]
+PLANET_SYMBOLS_FA = {
+    'sun': "خورشید ☉",
+    'moon': "ماه ☽",
+    'mercury': "عطارد ☿",
+    'venus': "زهره ♀",
+    'mars': "مریخ ♂",
+    'jupiter': "مشتری ♃",
+    'saturn': "زحل ♄",
+    'uranus': "اورانوس ⛢",
+    'neptune': "نپتون ♆",
+    'pluto': "پلوتو ♇",
+}
 
 # داده‌های نجومی را بارگذاری کنید (یک بار در طول عمر برنامه)
 try:
     # skyfield داده‌های ephemeris را در خود ذخیره می‌کند.
+    # توصیه می‌شود از ephemeris‌های کاملتر مانند de430.bsp استفاده شود، اما de421.bsp رایج است.
     EPHEMERIS = load('de421.bsp')
 except Exception as e:
     # برای جلوگیری از کرش در محیط‌هایی که دسترسی به شبکه محدود است
-    print(f"Error loading ephemeris: {e}")
+    print(f"Error loading ephemeris: {e}. Skyfield calculations will fail.")
     EPHEMERIS = None
 
 def get_zodiac_position(lon: float) -> Tuple[str, str]:
-    """تبدیل طول جغرافیایی (Longitude) به علامت زودیاک و درجه/دقیقه آن."""
+    """تبدیل طول جغرافیایی (Ecliptic Longitude) به علامت زودیاک و درجه/دقیقه آن."""
+    
+    # اطمینان از قرار گرفتن طول جغرافیایی در دامنه ۰ تا ۳۶۰ درجه
     if lon < 0:
-        lon += 360 # طول‌های منفی را به دامنه ۰ تا ۳۶۰ می‌برد
+        lon += 360 
+    if lon >= 360:
+        lon %= 360
 
     sign_index = int(lon // DEGREES_PER_SIGN)
     degree_in_sign = lon % DEGREES_PER_SIGN
     
     sign_name = ZODIAC_SIGNS_FA[sign_index % 12]
     
+    # محاسبه دقیقه از قسمت اعشاری درجه
+    minutes = int((degree_in_sign - int(degree_in_sign)) * 60)
+    
     # فرمت دهی درجه: 15° 30'
-    degree_str = f"{int(degree_in_sign)}° {int((degree_in_sign - int(degree_in_sign)) * 60):02d}'"
+    degree_str = f"{int(degree_in_sign)}° {minutes:02d}'"
     
     return sign_name, degree_str
 
 def calculate_natal_chart(birth_time_utc: datetime.datetime, lat: float, lon: float) -> Dict[str, Any]:
     """
     محاسبه موقعیت اجرام آسمانی برای زمان و مکان تولد.
+    از محاسبات Topocentric (مشاهده از سطح زمین) برای دقت بالاتر استفاده می‌کند.
     
     Args:
         birth_time_utc: زمان تولد به وقت UTC (بهبود یافته از utils).
@@ -57,41 +78,49 @@ def calculate_natal_chart(birth_time_utc: datetime.datetime, lat: float, lon: fl
         
     # ۱. تعریف زمان (Time)
     ts = load.timescale()
-    t: Time = ts.utc(birth_time_utc)
+    # Skyfield زمان را بر اساس زمان پایتون (datetime.datetime) تفسیر می‌کند.
+    t: Time = ts.utc(birth_time_utc) 
     
-    # ۲. تعریف موقعیت مشاهده گر (Observer)
+    # ۲. تعریف موقعیت مشاهده گر (Topocentric Observer)
     observer: Topos = EPHEMERIS['earth'] + Topos(latitude_degrees=lat, longitude_degrees=lon)
     
     chart_data: Dict[str, Any] = {}
     
-    # ۳. محاسبه موقعیت اجرام (فقط خورشید و ماه برای Placeholder)
+    # ۳. محاسبه موقعیت اجرام (Topocentric Ecliptic Longitude)
     for planet_name in PLANETS:
-        # اجرام skyfield
-        planet_ephem = EPHEMERIS[planet_name]
+        try:
+            # مرجع جرم آسمانی
+            planet_ephem = EPHEMERIS[planet_name]
+            
+            # مشاهده موقعیت جرم از دید ناظر
+            position = observer.at(t).observe(planet_ephem)
+            
+            # محاسبه طول، عرض و فاصله در دستگاه مختصات دایرةالبروج (Ecliptic Longitude)
+            # epoch='date' برای استفاده از Equinox تاریخ مشاهده به جای J2000
+            lon_rad, lat_rad, distance = position.ecliptic_lonlat(epoch='date')
+            
+            # تبدیل به درجه
+            lon_deg = lon_rad.degrees
+            
+            # محاسبه علامت زودیاک و درجه/دقیقه
+            sign_name, degree_str = get_zodiac_position(lon_deg)
+            
+            chart_data[planet_name] = {
+                "name_fa": PLANET_SYMBOLS_FA.get(planet_name, planet_name),
+                "sign_fa": sign_name,
+                "position_str": degree_str,
+                "longitude_deg": round(lon_deg, 4),
+            }
         
-        # محاسبه موقعیت ژئوسنتریک در دایرةالبروج (ecliptic)
-        astrometric = observer.at(t).observe(planet_ephem)
-        # lon, lat, dist = astrometric.ecliptic_xyz(epoch='date').au 
-        
-        # محاسبه طول دایرةالبروجی (Ecliptic Longitude)
-        lon_rad, lat_rad, distance = astrometric.ecliptic_using(t).frame.ecliptic_xyz(t, center=399, target=0, observer=observer)
-        
-        # تبدیل رادیان به درجه
-        lon_deg = lon_rad.degrees
-        
-        # محاسبه علامت زودیاک
-        sign_name, degree_str = get_zodiac_position(lon_deg)
-        
-        chart_data[planet_name] = {
-            "sign_fa": sign_name,
-            "position_str": degree_str,
-            "longitude_deg": round(lon_deg, 4),
-            "name_fa": f"خورشید ☉" if planet_name == 'sun' else f"ماه ☽"
-            # در آینده باید فازهای ماه، سرعت، و سایر پارامترها اضافه شوند
-        }
+        except Exception as e:
+            chart_data[planet_name] = {"error": f"Error calculating {planet_name}: {e}"}
 
-    # ۴. محاسبه Ascendant و Houses (PLACEHOLDER - نیاز به کتابخانه House System)
-    # chart_data['ascendant'] = 'PLACEHOLDER' 
-    # chart_data['houses'] = 'PLACEHOLDER'
+    # ۴. محاسبه Ascendant و Houses (PLACEHOLDER)
+    # محاسبه Ascendant و Houses به یک کتابخانه جداگانه House System نیاز دارد 
+    # (مثلاً PyAstroCalc یا پیاده‌سازی دستی الگوریتم‌های Placidus/Koch).
+    # این بخش باید در آینده تکمیل شود.
+    # chart_data['ascendant'] = 'PLACEHOLDER: نیاز به House System' 
+    # chart_data['houses'] = 'PLACEHOLDER: نیاز به House System'
     
     return chart_data
+
