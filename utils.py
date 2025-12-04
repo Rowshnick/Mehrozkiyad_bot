@@ -1,131 +1,120 @@
-import os
-import datetime
+# ======================================================================
+# ماژول Utility Functions
+# شامل توابع کمکی برای ارتباط با تلگرام، پارس تاریخ، و جغرافیایی (Geocoding).
+# از httpx و client.to_thread.run_sync() برای جلوگیری از Blocking I/O استفاده می‌کند.
+# ======================================================================
+
 import httpx
-from persiantools import jdatetime
+import datetime
 import pytz
-import re
+from persiantools.jdatetime import JalaliDateTime
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError
-from typing import Optional
+from geopy.location import Location
+from typing import Optional, Tuple, Dict, Any, Callable
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+# ثابت‌ها
+TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+NOMINATIM_USER_AGENT = "mehrozkiyad_astrology_bot"
 
-# --- توابع Telegram ---
-async def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown", keyboard: Optional[dict] = None):
-    """تابع مرکزی برای ارسال پیام به تلگرام."""
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-    if keyboard:
-        payload["reply_markup"] = keyboard
-        
-    # تلگرام MarkdownV2 را ترجیح می دهد، برای جلوگیری از خطاهای پارس
-    if parse_mode == "Markdown":
-        # Escape کردن کاراکترهای خاص تلگرام برای MarkdownV2
-        text = text.replace('.', '\.').replace('-', '\-').replace('(', '\)').replace(')', '\)').replace('|', '\|')
-        payload["text"] = text
-        payload["parse_mode"] = "MarkdownV2"
-        
-    try:
-        MAX_RETRIES = 3
-        # استفاده از client.wait برای httpx مناسب نیست. بجای آن از asyncio.sleep استفاده می‌کنیم.
-        import asyncio
-        
-        for attempt in range(MAX_RETRIES):
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(TELEGRAM_API_URL, json=payload)
-                if response.status_code == 429 and attempt < MAX_RETRIES - 1:
-                    # Too Many Requests - صبر و تلاش مجدد
-                    retry_after = 2 ** attempt
-                    print(f"Rate limit hit. Retrying in {retry_after}s...")
-                    await asyncio.sleep(retry_after) 
-                    continue
-                response.raise_for_status()
-                return response.json()
-        
-        print(f"Telegram API Error after {MAX_RETRIES} attempts.")
-        return {"ok": False, "description": "Too Many Requests (Rate Limit)"}
+# کلاینت HTTP آسنکرون (برای استفاده در bot_app)
+client = httpx.AsyncClient()
 
-    except httpx.HTTPStatusError as e:
-        print(f"Telegram API Error (Status {e.response.status_code}): {e.response.text}")
-        return {"ok": False, "description": f"HTTP Error: {e.response.status_code}"}
-    except Exception as e:
-        print(f"Error sending message to Telegram: {e}")
-        return {"ok": False, "description": f"Internal Error: {e}"}
+# سرویس مکان‌یابی (به دلیل Blocking بودن، باید در thread اجرا شود)
+geolocator = Nominatim(user_agent=NOMINATIM_USER_AGENT)
 
+# --- توابع ارتباطی تلگرام ---
 
-# --- توابع Date/Time و Location ---
-def convert_to_shamsi_date(dt_utc: datetime.datetime) -> str:
-    """تبدیل datetime میلادی (UTC) به رشته تاریخ و زمان شمسی فارسی."""
-    try:
-        # تنظیم منطقه زمانی به تهران برای نمایش محلی
-        tehran_tz = pytz.timezone('Asia/Tehran')
-        local_dt = dt_utc.astimezone(tehran_tz)
-        
-        jdate = jdatetime.JalaliDateTime.from_gregorian(local_dt)
-        # فرمت خروجی: "۱۴۰۳/۰۹/۱۱ - ۱۷:۳۰:۰۰ (به وقت تهران)"
-        return jdate.strftime('%Y/%m/%d') + ' - ' + local_dt.strftime('%H:%M:%S') + ' (به وقت تهران)'
-    except Exception as e:
-        print(f"Error converting to shamsi: {e}")
-        return f"خطا در تبدیل تاریخ: {e}"
-
-def parse_shamsi_to_utc_datetime(shamsi_date_str: str) -> Optional[datetime.datetime]:
-    """
-    پارس کردن رشته تاریخ و زمان شمسی (YYYY/MM/DD HH:MM) و تبدیل به datetime UTC.
-    """
-    # الگوی تطابق: YYYY/MM/DD HH:MM (بدون ثانیه در گروه های regex)
-    match = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s+(\d{1,2}):(\d{1,2})', shamsi_date_str)
+async def send_message(bot_token: str, chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> None:
+    """ارسال پیام به تلگرام به صورت آسنکرون."""
+    url = f"{TELEGRAM_API_BASE}{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "MarkdownV2",
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     
-    if match:
-        year, month, day, hour, minute = match.groups()
-        
-        try:
-            # 1. ساخت شیء JalaliDateTime و تبدیل به میلادی
-            jdate = jdatetime.JalaliDateTime(
-                int(year), int(month), int(day), int(hour), int(minute), 0
-            )
-            dt_gregorian_naive = jdate.to_gregorian()
-            
-            # 2. تعریف منطقه زمانی محلی (تهران) برای ورودی
-            local_tz = pytz.timezone('Asia/Tehran')
-            local_dt = local_tz.localize(dt_gregorian_naive, is_dst=None)
-            
-            # 3. تبدیل به UTC (زمان جهانی)
-            dt_utc = local_dt.astimezone(pytz.utc)
-            return dt_utc
-            
-        except ValueError as e:
-            print(f"Value Error in date parsing: {e}")
-            return None # تاریخ یا زمان نامعتبر
-    else:
-        return None
-
-async def get_coordinates_from_city(city_name: str) -> Optional[tuple[float, float]]:
-    """
-    دریافت عرض و طول جغرافیایی شهر با استفاده از Geopy (به صورت آسنکرون).
-    """
-    geolocator = Nominatim(user_agent="AstrologyBot")
     try:
-        # **ترفند اصلی: استفاده از to_thread.run_sync برای اجرای کد مسدودکننده**
-        async with httpx.AsyncClient() as client:
-            # ما فراخوانی blocking را در یک Thread اجرا می کنیم تا Event Loop بلاک نشود.
-            location = await client.to_thread.run_sync(
-                geolocator.geocode, 
-                f"{city_name}, Iran", # جستجو با تمرکز بر ایران
-                timeout=10
-            )
-            
-        if location:
-            # Skyfield از (عرض جغرافیایی، طول جغرافیایی) استفاده می‌کند
-            return location.latitude, location.longitude
-        return None
-        
-    except GeocoderTimedOut:
-        print(f"Geocoder request timed out for {city_name}.")
-        return None
-    except GeocoderServiceError as e:
-        print(f"Geocoder Service Error for {city_name}: {e}")
-        return None
+        # ارسال آسنکرون
+        await client.post(url, json=payload)
+    except httpx.HTTPError as e:
+        print(f"HTTP error sending message: {e}")
     except Exception as e:
-        print(f"Unexpected Geocoding Error for {city_name}: {e}")
-        return None
+        print(f"Unexpected error sending message: {e}")
 
+async def answer_callback_query(bot_token: str, callback_query_id: str, text: Optional[str] = None) -> None:
+    """پاسخ به Callback Query (برای حذف ساعت چرخان Loading)."""
+    url = f"{TELEGRAM_API_BASE}{bot_token}/answerCallbackQuery"
+    payload = {
+        "callback_query_id": callback_query_id,
+    }
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = True
+        
+    try:
+        # ارسال آسنکرون
+        await client.post(url, json=payload)
+    except httpx.HTTPError as e:
+        print(f"HTTP error answering callback: {e}")
+
+# --- توابع پارس تاریخ و زمان ---
+
+def parse_persian_date(date_str: str) -> Optional[JalaliDateTime]:
+    """تبدیل رشته تاریخ شمسی (مثلاً 1370/01/01) به JalaliDateTime."""
+    try:
+        parts = date_str.split('/')
+        if len(parts) == 3:
+            year, month, day = map(int, parts)
+            return JalaliDateTime(year, month, day)
+    except ValueError:
+        return None
+    return None
+
+def find_timezone(city_name: str) -> Optional[pytz.tzinfo.BaseTzInfo]:
+    """پیدا کردن منطقه زمانی بر اساس نام شهر (PLACEHOLDER برای منطق دقیق)"""
+    # این تابع باید در یک دیتابیس یا سرویس محلی شهر-منطقه زمانی جستجو کند.
+    # برای جلوگیری از خطا، یک منطقه زمانی پیش‌فرض برمی‌گرداند.
+    try:
+        # برای ایران، تهران را به عنوان پیش فرض در نظر می‌گیریم.
+        if "تهران" in city_name or "tehran" in city_name.lower():
+            return pytz.timezone('Asia/Tehran')
+        
+        # جستجو در مناطق زمانی معروف
+        for tz_name in pytz.common_timezones:
+            if city_name.lower() in tz_name.lower():
+                return pytz.timezone(tz_name)
+    except Exception:
+        pass
+        
+    # پیش‌فرض امن: Asia/Tehran
+    return pytz.timezone('Asia/Tehran')
+
+# --- توابع جغرافیایی (Geocoding) ---
+
+async def get_coordinates_from_city(city_name: str) -> Tuple[Optional[float], Optional[float], Optional[pytz.tzinfo.BaseTzInfo]]:
+    """
+    دریافت مختصات جغرافیایی (Lat/Lon) و منطقه زمانی (TimeZone) از نام شهر.
+    این عملیات مسدودکننده (Blocking) است و باید در یک Thread جداگانه اجرا شود.
+    """
+    
+    def blocking_geocode() -> Tuple[Optional[float], Optional[float]]:
+        """عملیات Geocoding مسدودکننده با geopy."""
+        try:
+            # مهلت زمانی (Timeout) برای جلوگیری از مسدود شدن طولانی
+            location: Optional[Location] = geolocator.geocode(city_name, timeout=5)
+            if location:
+                return location.latitude, location.longitude
+            return None, None
+        except Exception as e:
+            print(f"Geocoding error for {city_name}: {e}")
+            return None, None
+
+    # اجرای تابع مسدودکننده در یک thread جداگانه (حل مشکل Blocking I/O)
+    lat, lon = await client.to_thread.run_sync(blocking_geocode)
+    
+    # پیدا کردن منطقه زمانی (به دلیل عدم پشتیبانی geopy از Timezone در همه سرویس‌ها)
+    tz = find_timezone(city_name)
+    
+    return lat, lon, tz
