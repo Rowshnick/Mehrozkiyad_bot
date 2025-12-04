@@ -25,16 +25,14 @@ ENV APP_HOME /usr/src/app
 WORKDIR $APP_HOME
 
 # 4. کپی و نصب وابستگی‌ها
-# ابتدا requirements.txt را کپی کرده و وابستگی‌ها را نصب می‌کند تا از Docker Layer Caching بهینه استفاده شود.
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # 5. کپی کردن سورس کد برنامه
-# کپی کردن تمام فایل‌های سورس (bot_app.py، utils.py، keyboards.py و...)
 COPY . .
 
-# 6. دستور اجرای نهایی و صریح (python -m uvicorn)
-# اجرای uvicorn به صورت ماژول پایتون.
-# 'bot_app:app' به ماژول 'bot_app.py' و نمونه FastAPI به نام 'app' اشاره می‌کند.
-CMD ["python", "-m", "uvicorn", "bot_app:app", "--host", "0.0.0.0", "--port", "8080"]
+# 6. دستور اجرای نهایی (Shell Form)
+# استفاده از Shell Form برای فعال کردن تفسیر متغیرهای محیطی.
+# ${PORT:-8080} به این معناست: از متغیر محیطی $PORT استفاده کن، در غیر این صورت از 8080 استفاده کن.
+CMD uvicorn bot_app:app --host 0.0.0.0 --port ${PORT:-8080}
