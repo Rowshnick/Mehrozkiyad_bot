@@ -200,7 +200,7 @@ app = FastAPI()
 @app.post(f"/{BOT_TOKEN}")
 async def webhook_handler(request: Request):
     """هندلر اصلی وب‌هوک تلگرام."""
-    if request.headers.get("x-telegram-bot-api-secret-token") != WEBHOOK_SECRET:
+    if request.headers.get("x-telegram-bot-api-secret-token") != WEBHOOK_URL:
         raise HTTPException(status_code=403, detail="Invalid Secret Token")
 
     body = await request.json()
