@@ -1,4 +1,5 @@
 fastapi
+​python-telegram-bot
 uvicorn[standard]
 pydantic
 skyfield
